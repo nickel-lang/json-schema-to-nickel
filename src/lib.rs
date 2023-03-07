@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use nickel_lang::{
     identifier::Ident,
     mk_app, mk_fun,
-    term::{make, record::RecordData, BinaryOp, RecordAttrs, RichTerm, Term, UnaryOp},
-    types::{TypeF, Types},
+    term::{make, BinaryOp, Term, UnaryOp},
+    types::{RecordRows, RecordRowsF, TypeF, Types},
 };
 use schemars::schema::{InstanceType, Schema, SchemaObject, SingleOrVec};
 
@@ -36,11 +34,7 @@ fn instance_to_types(instance: InstanceType) -> Types {
                 )
             )
         ))),
-        InstanceType::Object => Types(TypeF::Flat(RichTerm::from(Term::Record(RecordData {
-            fields: HashMap::new(),
-            attrs: RecordAttrs { open: true },
-            sealed_tail: None,
-        })))),
+        InstanceType::Object => Types(TypeF::Record(RecordRows(RecordRowsF::TailDyn))),
         InstanceType::Array => Types(TypeF::Array(Box::new(Types(TypeF::Dyn)))),
     }
 }

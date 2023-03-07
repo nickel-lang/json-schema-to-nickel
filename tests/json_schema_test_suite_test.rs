@@ -14,10 +14,11 @@ fn translation_typecheck_test(
     let instance: RichTerm = serde_json::from_value(test_case.instance).unwrap();
 
     let actual = Program::new_from_source(
-        StringReader::new(&dbg!(match types.0 {
+        StringReader::new(&dbg!((match types.0 {
             TypeF::Flat(ref t) => format!("{} | ({})", instance, t),
             _ => format!("{} | ({})", instance, types),
-        })),
+        })
+        .replace("\u{a0}", " "))), // TODO: fix nbsp in stringification of { ; Dyn }
         "test",
     )
     .unwrap()
