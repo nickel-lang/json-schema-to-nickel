@@ -40,8 +40,23 @@ fn instance_to_types(instance: InstanceType) -> Types {
 }
 
 pub fn schema_to_types(schema: Schema) -> Types {
-    let Schema::Object(schema) = schema else {
-        todo!()
+    let schema = match schema {
+        Schema::Bool(true) => return Types(TypeF::Dyn),
+        Schema::Bool(false) => {
+            return Types(TypeF::Flat(mk_fun!(
+                "label",
+                "value",
+                mk_app!(
+                    make::op1(
+                        UnaryOp::StaticAccess(Ident::new("blame_with")),
+                        make::var("contract")
+                    ),
+                    make::string("Never contract evaluated"),
+                    make::var("label")
+                )
+            )))
+        }
+        Schema::Object(s) => s,
     };
 
     match schema {
