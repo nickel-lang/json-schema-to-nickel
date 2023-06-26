@@ -1,9 +1,8 @@
 use std::{error::Error, fs::File, io::stdout, path::PathBuf};
 
 use clap::Parser;
-use json_schema_to_nickel::schema_to_types;
-use nickel_lang::pretty::{DocBuilder, Pretty};
-use pretty::BoxAllocator;
+use json_schema_to_nickel::schema_to_contract;
+use nickel_lang::pretty::*;
 use schemars::schema::Schema;
 use terminal_size::{terminal_size, Width};
 
@@ -21,8 +20,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|(Width(w), _)| w as usize)
         .unwrap_or(80);
 
-    let types: DocBuilder<'_, BoxAllocator> =
-        dbg!(schema_to_types(dbg!(schema))).pretty(&BoxAllocator);
+    let types: DocBuilder<'_, _, ()> =
+        dbg!(schema_to_contract(dbg!(schema))).pretty(&pretty::BoxAllocator);
+
     types.render(size, &mut stdout())?;
 
     Ok(())

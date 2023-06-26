@@ -1,21 +1,30 @@
 use nickel_lang::{
     identifier::Ident,
     mk_app, mk_fun,
-    term::{make, BinaryOp, Term, UnaryOp},
-    types::{RecordRows, RecordRowsF, TypeF, Types},
+    position::TermPos,
+    term::{
+        make,
+        record::{RecordAttrs, RecordData},
+        BinaryOp, RichTerm, Term, UnaryOp,
+    },
+    types::{EnumRows, RecordRows, RecordRowsF, TypeF, Types},
 };
 use schemars::schema::{InstanceType, Schema, SchemaObject, SingleOrVec};
 
-fn instance_to_types(instance: InstanceType) -> Types {
+fn types(t: TypeF<Box<Types>, RecordRows, EnumRows>) -> Types {
+    Types {
+        types: t,
+        pos: TermPos::None,
+    }
+}
+
+fn instance_to_contract(instance: InstanceType) -> RichTerm {
     match instance {
-        InstanceType::Number => Types(TypeF::Num),
-        InstanceType::Boolean => Types(TypeF::Bool),
-        InstanceType::String => Types(TypeF::Str),
-        InstanceType::Integer => Types(TypeF::Flat(make::op1(
-            UnaryOp::StaticAccess(Ident::new("Int")),
-            make::var("num"),
-        ))),
-        InstanceType::Null => Types(TypeF::Flat(mk_fun!(
+        InstanceType::Number => Term::Var("Number".into()).into(),
+        InstanceType::Boolean => Term::Var("Bool".into()).into(),
+        InstanceType::String => Term::Var("String".into()).into(),
+        InstanceType::Integer => Term::Var("std.number.Integer".into()).into(),
+        InstanceType::Null => mk_fun!(
             "label",
             "value",
             mk_app!(
@@ -25,36 +34,34 @@ fn instance_to_types(instance: InstanceType) -> Types {
                 ),
                 make::var("value"),
                 mk_app!(
-                    make::op1(
-                        UnaryOp::StaticAccess(Ident::new("blame_with")),
-                        make::var("contract"),
-                    ),
+                    Term::Var("std.contract.blame_with".into()),
                     make::string("expected null"),
                     make::var("label")
                 )
             )
-        ))),
-        InstanceType::Object => Types(TypeF::Record(RecordRows(RecordRowsF::TailDyn))),
-        InstanceType::Array => Types(TypeF::Array(Box::new(Types(TypeF::Dyn)))),
+        ),
+        InstanceType::Object => Term::Record(RecordData {
+            attrs: RecordAttrs { open: true },
+            ..RecordData::empty()
+        })
+        .into(),
+        InstanceType::Array => mk_app!(Term::Var("Array".into()), Term::Var("Dyn".into())),
     }
 }
 
-pub fn schema_to_types(schema: Schema) -> Types {
+pub fn schema_to_contract(schema: Schema) -> RichTerm {
     let schema = match schema {
-        Schema::Bool(true) => return Types(TypeF::Dyn),
+        Schema::Bool(true) => return Term::Var("Dyn".into()).into(),
         Schema::Bool(false) => {
-            return Types(TypeF::Flat(mk_fun!(
+            return mk_fun!(
                 "label",
                 "value",
                 mk_app!(
-                    make::op1(
-                        UnaryOp::StaticAccess(Ident::new("blame_with")),
-                        make::var("contract")
-                    ),
+                    Term::Var("std.contract.blame_with".into()),
                     make::string("Never contract evaluated"),
                     make::var("label")
                 )
-            )))
+            )
         }
         Schema::Object(s) => s,
     };
@@ -74,7 +81,7 @@ pub fn schema_to_types(schema: Schema) -> Types {
             object: None,
             reference: None,
             extensions: _,
-        } => instance_to_types(*instance),
+        } => instance_to_contract(*instance),
 
         // Similar easy case, single type inside vec, nothing else
         SchemaObject {
@@ -90,7 +97,7 @@ pub fn schema_to_types(schema: Schema) -> Types {
             object: None,
             reference: None,
             extensions: _,
-        } if instances.len() == 1 => instance_to_types(instances[0]),
+        } if instances.len() == 1 => instance_to_contract(instances[0]),
 
         _ => todo!(),
     }

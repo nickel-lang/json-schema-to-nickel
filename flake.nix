@@ -16,9 +16,11 @@
         flake-utils.follows = "utils";
       };
     };
+
+    topiary.url = "github:tweag/topiary";
   };
 
-  outputs = { self, nixpkgs, utils, naersk, nickel }: {
+  outputs = { self, nixpkgs, utils, naersk, nickel, ... }@inputs: {
     overlays = rec {
       expects-naersk = final: _: {
         json-schema-to-nickel = final.naersk.buildPackage {
@@ -42,8 +44,9 @@
       packages = [
         cargo
         cargo-watch
-        nickel.packages.${system}.nickel
-        nickel.packages.${system}.lsp-nls
+        clippy
+        inputs.topiary.packages.${system}.default
+        nickel.packages.${system}.default
         rust-analyzer
         rustc
         rustfmt

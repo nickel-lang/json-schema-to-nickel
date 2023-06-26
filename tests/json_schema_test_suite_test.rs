@@ -1,5 +1,5 @@
 use json_schema_test_suite::{json_schema_test_suite, TestCase};
-use nickel_lang::{program::Program, term::RichTerm, types::TypeF};
+use nickel_lang::{eval::cache::lazy::CBNCache, program::Program, term::RichTerm, types::TypeF};
 use schemars::schema::Schema;
 use stringreader::StringReader;
 
@@ -9,16 +9,12 @@ fn translation_typecheck_test(
     _server_address: &str,
     test_case: TestCase,
 ) {
-    let schema: Schema = serde_json::from_value(test_case.schema).unwrap();
-    let types = json_schema_to_nickel::schema_to_types(dbg!(schema));
+    let schema: Schema = serde_json::from_value(dbg!(test_case.schema)).unwrap();
+    let contract = json_schema_to_nickel::schema_to_contract(dbg!(schema));
     let instance: RichTerm = serde_json::from_value(test_case.instance).unwrap();
 
-    let actual = Program::new_from_source(
-        StringReader::new(&dbg!((match types.0 {
-            TypeF::Flat(ref t) => format!("{} | ({})", instance, t),
-            _ => format!("{} | ({})", instance, types),
-        })
-        .replace("\u{a0}", " "))), // TODO: fix nbsp in stringification of { ; Dyn }
+    let actual = Program::<CBNCache>::new_from_source(
+        StringReader::new(&dbg!(format!("{} | ({})", instance, contract),)),
         "test",
     )
     .unwrap()
