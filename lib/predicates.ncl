@@ -7,17 +7,6 @@
     = fun error' pred x =>
       { success = pred x, error = error' },
 
-  isNull
-    : Dyn -> { success : Bool, error : String }
-    | doc m%"
-      `isNull x` succeeds if and only if `x` is `null`.
-    "%
-    = fun x =>
-      if x != null then
-        { success = false, error = "expected `null`, found `%{std.serialize 'Json x}`" }
-      else
-        { success = true, error = "" },
-
   never : Dyn -> { success : Bool, error : String }
     = std.function.const { success = false, error = "never" },
 
@@ -56,13 +45,23 @@
       |> std.array.fold_right
         (
           fun pred acc =>
-            let { success, error } = pred x in
-            if success then
-              { success = true, error = "" }
+            let result = pred x in
+            if result.success then
+              { success = true, errors = [] }
             else
-              std.record.update "error" error acc | { success : Bool, error : String }
+              { success = acc.success, errors = ["  - %{result.error}"] @ acc.errors }
         )
-        { success = false, error = "you should never see this" },
+        { success = false, errors = [] }
+      |> (
+        fun result =>
+          if result.success then
+            { success = true, error = "" }
+          else
+            {
+              success = false,
+              error = "anyOf: none of the options matched\n%{std.string.join "\n" result.errors}"
+            }
+      ),
 
   allOf
     : Array (Dyn -> { success : Bool, error : String }) -> Dyn -> { success : Bool, error : String }
@@ -141,13 +140,21 @@
 
   isType
     : [|
-      'Number,
-      'Bool,
-      'String,
       'Array,
-      'Record
+      'Bool,
+      'Integer,
+      'Null,
+      'Number,
+      'Record,
+      'String,
     |] -> (Dyn -> { success : Bool, error : String })
-    = fun t => from_simple_predicate "value is not of type %{std.string.from_enum t}" (fun x => std.typeof x == t),
+    = fun t =>
+      t
+      |> match {
+        'Null => from_simple_predicate "expected `null`" (fun x => x == null),
+        'Integer => from_simple_predicate "expected an integer" (fun x => std.is_number x && std.number.is_integer (x | Number)),
+        _ => from_simple_predicate "value is not of type %{std.string.from_enum t}" (fun x => std.typeof x == t),
+      },
 
   arrays = import "./arrays.ncl",
   records = import "./records.ncl",

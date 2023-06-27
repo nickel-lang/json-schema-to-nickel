@@ -33,6 +33,17 @@ let definitions = {
               false
               predicates.never,
             predicates.records.required ["floats"]
+          ],
+        predicates.allOf
+          [
+            predicates.records.record
+              {
+                ints = predicates.arrays.arrayOf (predicates.isType 'Integer)
+              }
+              {}
+              false
+              predicates.never,
+            predicates.records.required ["ints"]
           ]
       ]
 }
@@ -52,7 +63,7 @@ let Schema = {
         predicates.anyOf
           [
             definitions.MyEnum,
-            predicates.isNull
+            predicates.isType 'Null
           ]
       )
 }
@@ -64,7 +75,7 @@ in
   four = 4,
   my_json_enum = "a string",
   my_nullable_enum = {
-    floats = [1, 2, 3]
+    ints = [1, 2, 3]
   },
 } | Schema
 
