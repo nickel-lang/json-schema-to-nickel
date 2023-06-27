@@ -278,6 +278,48 @@
           )
           { success = true, error = "" },
 
+  record'
+    : { _ : Dyn -> { success : Bool, error : String } } -> { _ : Dyn -> { success : Bool, error : String } } -> Bool -> (Dyn -> { success : Bool, error : String }) -> Dyn -> { success : Bool, error : String }
+    | doc m%"
+      `record properties patternProperties additionalAllowed
+      additionalProperties x` is a combination of the `properties`,
+      `patternProperties` and `additionalProperties` validation keywords in
+      JSON schema.
+
+      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.5]
+    "%
+    = fun properties patternProperties additionalAllowed additionalProperties x =>
+      if !std.is_record x then
+        { success = true, error = "" }
+      else
+        let x = x | { _ : Dyn } in
+        let compiled_patterns : Array (String -> { success : Bool, error : String })
+          =
+            patternProperties
+            |> std.record.to_array
+            |> std.array.map
+              (
+                fun { field, value } =>
+                  let matches = std.string.is_match field in
+                  fun field =>
+                    if matches field then
+                      value x."%{field}"
+                    else
+                      { success = true, error = "" }
+              )
+          in
+        let check_properties : String -> { success : Bool, error : String }
+          = fun field =>
+            if !std.record.has_field field properties then
+              { success = true, error = "" }
+            else
+              properties."%{field}" x."%{field}"
+          in
+        std.record.fields x
+        |> std.array.fold_right
+          (fun field acc => { success = true, error = "" })
+          { success = true, error = "" },
+
   record
     : { _ : Dyn -> { success : Bool, error : String } } -> { _ : Dyn -> { success : Bool, error : String } } -> Bool -> (Dyn -> { success : Bool, error : String }) -> Dyn -> { success : Bool, error : String }
     | doc m%"
