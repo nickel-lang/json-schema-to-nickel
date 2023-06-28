@@ -10,7 +10,7 @@ fn translation_typecheck_test(
     test_case: TestCase,
 ) {
     let schema: Schema = serde_json::from_value(dbg!(test_case.schema)).unwrap();
-    let contract = json_schema_to_nickel::schema_to_contract(dbg!(schema));
+    let contract = json_schema_to_nickel::schema_to_predicate(dbg!(schema));
     let instance: RichTerm = serde_json::from_value(test_case.instance).unwrap();
 
     let actual = Program::<CBNCache>::new_from_source(

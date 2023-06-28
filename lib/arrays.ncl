@@ -7,7 +7,7 @@
     "%
     = fun pred x =>
       if !std.is_array x then
-        { success = false, error = "value isn't an array" }
+        { success = true, error = "" }
       else
         let x = x | Array Dyn in
         x
@@ -21,6 +21,38 @@
                 acc
           )
           { success = true, error = "" },
+
+  contains
+    : (Dyn -> { success : Bool, error : String }) -> Dyn -> { success : Bool, error : String }
+    | doc m%"
+      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.6]
+    "%
+    = fun pred x =>
+      if !std.is_array x then
+        { success = true, error = "" }
+      else
+        let x = x | Array Dyn in
+        x
+        |> std.array.fold_right
+          (
+            fun x acc =>
+              let result = pred x in
+              if result.success then
+                { success = true, errors = [] }
+              else
+                { success = false, errors = ["  - %{result.error}"] @ acc.errors }
+          )
+          { success = false, errors = [] }
+        |> (
+          fun result =>
+            if result.success then
+              { success = true, error = "" }
+            else
+              {
+                success = false,
+                error = "contains: none of elements matched\n%{std.string.join "\n" result.errors}"
+              }
+        ),
 
   items
     : Array (Dyn -> { success : Bool, error : String }) -> Dyn -> { success : Bool, error : String }

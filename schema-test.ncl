@@ -48,7 +48,6 @@ let definitions = {
       ]
 }
 in
-
 let Schema = {
   my_bool | Bool,
   my_int | std.number.Integer,
