@@ -2,7 +2,7 @@ use std::{error::Error, fs::File, io::stdout, path::PathBuf};
 
 use clap::Parser;
 use json_schema_to_nickel::root_schema;
-use nickel_lang::pretty::*;
+use nickel_lang_core::pretty::*;
 use schemars::schema::RootSchema;
 use terminal_size::{terminal_size, Width};
 

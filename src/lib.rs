@@ -1,4 +1,4 @@
-use nickel_lang::{
+use nickel_lang_core::{
     identifier::Ident,
     mk_app,
     term::{
