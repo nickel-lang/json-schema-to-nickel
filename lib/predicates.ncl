@@ -160,5 +160,14 @@
   records = import "./records.ncl",
   numbers = import "./numbers.ncl",
   strings = import "./strings.ncl",
+
+  contract_from_predicate : (Dyn -> { success : Bool, error : String }) -> Dyn -> Dyn -> Dyn
+    = fun predicate label value =>
+      let { success, error } = predicate value
+      in
+      if success then
+        value
+      else
+        (std.contract.blame_with_message error label | Dyn),
 }
 

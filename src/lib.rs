@@ -449,18 +449,27 @@ pub fn root_schema(root: RootSchema) -> RichTerm {
         .map(|(name, schema)| (Ident::from(name), Field::from(schema_to_predicate(schema))));
 
     Term::Let(
-        "definitions".into(),
-        Term::Record(RecordData {
-            fields: definitions.collect(),
-            attrs: Default::default(),
-            sealed_tail: None,
-        })
+        "predicates".into(),
+        Term::Import("./lib/predicates.ncl".into()).into(),
+        Term::Let(
+            "definitions".into(),
+            Term::Record(RecordData {
+                fields: definitions.collect(),
+                attrs: Default::default(),
+                sealed_tail: None,
+            })
+            .into(),
+            mk_app!(
+                make::var("predicates.contract_from_predicate"),
+                schema_to_predicate(Schema::Object(root.schema))
+            ),
+            LetAttrs {
+                rec: true,
+                ..Default::default()
+            },
+        )
         .into(),
-        schema_to_predicate(Schema::Object(root.schema)),
-        LetAttrs {
-            rec: true,
-            ..Default::default()
-        },
+        Default::default(),
     )
     .into()
 }
