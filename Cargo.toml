@@ -2,7 +2,7 @@
 name = "json-schema-to-nickel"
 version = "0.1.0"
 edition = "2021"
-authors = ["Matthew Toohey <contact@mtoohey.com>"]
+authors = ["Matthew Toohey <contact@mtoohey.com>", "Viktor Kleen <viktor.kleen@tweag.io>"]
 description = "Convert JSON schemas into Nickel contracts."
 readme = "README.md"
 homepage = "https://github.com/mtoohey31/json-schema-to-nickel"
