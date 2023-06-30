@@ -46,10 +46,10 @@
         (
           fun pred acc =>
             let result = pred x in
-            if result.success then
+            if result.success || acc.success then
               { success = true, errors = [] }
             else
-              { success = acc.success, errors = ["  - %{result.error}"] @ acc.errors }
+              { success = false, errors = ["  - %{result.error}"] @ acc.errors }
         )
         { success = false, errors = [] }
       |> (

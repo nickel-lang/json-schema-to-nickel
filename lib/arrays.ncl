@@ -37,7 +37,7 @@
           (
             fun x acc =>
               let result = pred x in
-              if result.success then
+              if result.success || acc.success then
                 { success = true, errors = [] }
               else
                 { success = false, errors = ["  - %{result.error}"] @ acc.errors }
@@ -50,7 +50,7 @@
             else
               {
                 success = false,
-                error = "contains: none of elements matched\n%{std.string.join "\n" result.errors}"
+                error = "contains: no elements matched\n%{std.string.join "\n" result.errors}"
               }
         ),
 
