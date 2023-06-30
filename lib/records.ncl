@@ -192,5 +192,51 @@
                 acc
           )
           { success = true, error = "" },
+
+  dependencies
+    : { _ : Dyn } -> Dyn -> { success : Bool, error : String }
+    | doc m%"
+      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.5.7]
+    "%
+    =
+      let mustHaveFields : Array String -> { _ : Dyn } -> { success : Bool, error : String }
+        = fun fields x =>
+          fields
+          |> std.array.fold_right
+            (
+              fun field acc =>
+                if !std.record.has_field field x then
+                  { success = false, error = "expected field `%{field}`" }
+                else
+                  acc
+            )
+            { success = true, error = "" }
+        in
+      fun deps x =>
+        if !std.is_record x then
+          { success = true, error = "" }
+        else
+          let x = x | { _ : Dyn } in
+          deps
+          |> std.record.to_array
+          |> std.array.fold_right
+            (
+              fun { field, value } acc =>
+                if !std.record.has_field field x then
+                  acc
+                else
+                  let result =
+                    if std.is_array value then
+                      mustHaveFields (value | Array String) x
+                    else
+                      let pred = value | Dyn -> { success : Bool, error : String } in
+                      pred (x | Dyn)
+                  in
+                  if !result.success then
+                    { success = false, error = "dependency of `%{field}` failed: %{result.error}" }
+                  else
+                    acc
+            )
+            { success = true, error = "" },
 }
 

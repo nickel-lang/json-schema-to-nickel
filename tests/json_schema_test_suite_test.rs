@@ -7,7 +7,6 @@ use stringreader::StringReader;
 #[json_schema_test_suite("vendor/JSON-Schema-Test-Suite", "draft7", {
     "optional_format_.*",
     "definitions_.*",
-    "dependencies_.*", // TODO: implement dependencies
     "id_.*",
     "maxItems_1_.*", // schemars doesn't accept floats as the value of `maxItems`
     "maxLength_1_.*", // schemars doesn't accept floats as the value of `maxLength`

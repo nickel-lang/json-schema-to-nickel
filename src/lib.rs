@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, HashMap};
+
 use nickel_lang_core::{
     identifier::Ident,
     mk_app,
@@ -411,6 +413,45 @@ fn reference_to_predicate(reference: String) -> RichTerm {
     }
 }
 
+fn dependencies(extensions: &BTreeMap<String, Value>) -> impl Iterator<Item = RichTerm> {
+    extensions
+        .get("dependencies")
+        .and_then(|v| v.as_object())
+        .map(|deps| {
+            mk_app!(
+                make::var("predicates.records.dependencies"),
+                Term::Record(RecordData::with_field_values(
+                    deps.into_iter()
+                        .map(|(key, value)| (
+                            Ident::from(key),
+                            if let Some(fields) = value.as_array().and_then(|v| v
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect::<Option<Vec<_>>>())
+                            {
+                                Term::Array(
+                                    Array::new(
+                                        fields
+                                            .into_iter()
+                                            .map(|s| Term::Str(s.into()).into())
+                                            .collect(),
+                                    ),
+                                    Default::default(),
+                                )
+                                .into()
+                            } else {
+                                serde_json::from_value::<Schema>(value.clone())
+                                    .map(schema_to_predicate)
+                                    .unwrap()
+                            }
+                        ))
+                        .collect()
+                ))
+            )
+        })
+        .into_iter()
+}
+
 pub fn schema_to_predicate(schema: Schema) -> RichTerm {
     let predicates: Vec<_> = match schema {
         Schema::Bool(true) => return make::var("predicates.always"),
@@ -427,7 +468,7 @@ pub fn schema_to_predicate(schema: Schema) -> RichTerm {
             array,
             object,
             reference,
-            extensions: _,
+            extensions,
         }) => instance_type
             .into_iter()
             .map(types_to_predicate)
@@ -442,9 +483,10 @@ pub fn schema_to_predicate(schema: Schema) -> RichTerm {
             .chain(string.into_iter().flat_map(|sv| string_predicates(*sv)))
             .chain(array.into_iter().flat_map(|av| array_predicates(*av)))
             .chain(object.into_iter().flat_map(|ov| object_predicates(*ov)))
-            .chain(reference.map(reference_to_predicate)),
-    }
-    .collect();
+            .chain(reference.map(reference_to_predicate))
+            .chain(dependencies(&extensions))
+            .collect(),
+    };
 
     mk_all_of(predicates)
 }
