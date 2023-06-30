@@ -447,22 +447,28 @@ pub fn root_schema(root: RootSchema) -> RichTerm {
         .definitions
         .into_iter()
         .map(|(name, schema)| (Ident::from(name), Field::from(schema_to_predicate(schema))));
+    wrap_predicate(
+        schema_to_predicate(Schema::Object(root.schema)),
+        definitions,
+    )
+}
 
+pub fn wrap_predicate(
+    predicate: RichTerm,
+    definitions: impl IntoIterator<Item = (Ident, Field)>,
+) -> RichTerm {
     Term::Let(
         "predicates".into(),
         Term::Import("./lib/predicates.ncl".into()).into(),
         Term::Let(
             "definitions".into(),
             Term::Record(RecordData {
-                fields: definitions.collect(),
+                fields: definitions.into_iter().collect(),
                 attrs: Default::default(),
                 sealed_tail: None,
             })
             .into(),
-            mk_app!(
-                make::var("predicates.contract_from_predicate"),
-                schema_to_predicate(Schema::Object(root.schema))
-            ),
+            mk_app!(make::var("predicates.contract_from_predicate"), predicate),
             LetAttrs {
                 rec: true,
                 ..Default::default()
