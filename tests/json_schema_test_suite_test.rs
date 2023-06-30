@@ -20,7 +20,6 @@ use stringreader::StringReader;
     "optional_cross_draft_.*",
     "optional_ecmascript_regex_.*",
     "optional_float_overflow_0_0", // pretty printer outputs scientific notation numbers which Nickel doesn't support
-    "propertyNames_.*", // TODO: implement propertyNames
     "refRemote_.*",
     "ref_.*", // TODO: make reference handling robust
     "unknownKeyword_.*", // we don't handle `$id` at all, yet

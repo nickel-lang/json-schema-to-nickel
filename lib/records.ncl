@@ -170,5 +170,27 @@
           { success = false, error = check_pattern_properties.error }
         else
           check_additional_properties,
+
+  propertyNames
+    : (Dyn -> { success : Bool, error : String }) -> Dyn -> { success : Bool, error : String }
+    | doc m%"
+      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.5.8]
+    "%
+    = fun pred x =>
+      if !std.is_record x then
+        { success = true, error = "" }
+      else
+        (x | { _ : Dyn })
+        |> std.record.fields
+        |> std.array.fold_right
+          (
+            fun field acc =>
+              let result = pred (field | Dyn) in
+              if !result.success then
+                { success = false, error = "field `%{field}` did not validate against `propertyNames` schema" }
+              else
+                acc
+          )
+          { success = true, error = "" },
 }
 

@@ -340,7 +340,14 @@ fn object_predicates(ov: ObjectValidation) -> impl Iterator<Item = RichTerm> {
         })
         .into_iter();
 
-    let property_names = property_names.map(|_s| todo!()).into_iter();
+    let property_names = property_names
+        .map(|s| {
+            mk_app!(
+                make::var("predicates.records.propertyNames"),
+                schema_to_predicate(*s)
+            )
+        })
+        .into_iter();
 
     let required = {
         if required.is_empty() {
