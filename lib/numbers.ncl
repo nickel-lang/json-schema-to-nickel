@@ -25,7 +25,7 @@
       else
         { success = false, error = "expected a maximum of %{std.string.from_number limit}" },
 
-  exclusiveMaxmium
+  exclusiveMaximum
     : Number -> Dyn -> { success : Bool, error : String }
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.2.3]
