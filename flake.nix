@@ -35,13 +35,14 @@
 
         src =
           let
-            mkFilter = regexp: path: _type: builtins.match regexp (lib.traceVal path) != null;
+            mkFilter = regexp: path: _type: builtins.match regexp path != null;
           in
           lib.cleanSourceWith {
             src = lib.cleanSource (craneLib.path ./.);
             filter = path: type:
               builtins.any (filter: filter path type) [
-                (mkFilter "vendor/JSON-Schema-Test-Suite/tests/.*json$")
+                (mkFilter ".*/vendor/JSON-Schema-Test-Suite/tests/.*json$")
+                (mkFilter ".*ncl$")
                 craneLib.filterCargoSources
               ];
           };
@@ -59,7 +60,9 @@
         checks.${system} = {
           json-schema-to-nickel-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
-            cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+            # `json_schema_test_suite` uses deprecated ways of
+            # interacting with `mockito` in a macro expansion in `tests/json_schema_test_suite_test.rs`
+            cargoClippyExtraArgs = "--all-targets -- --deny warnings --allow deprecated";
           });
 
           json-schema-to-nickel-fmt = craneLib.cargoFmt commonArgs;
