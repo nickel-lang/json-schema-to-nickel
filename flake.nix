@@ -33,6 +33,16 @@
       let
         craneLib = inputs.crane.mkLib pkgs;
 
+        missingSysPkgs =
+          if pkgs.stdenv.isDarwin then
+            [
+              pkgs.darwin.apple_sdk.frameworks.Security
+              pkgs.darwin.libiconv
+            ]
+          else
+            [ ];
+
+
         src =
           let
             mkFilter = regexp: path: _type: builtins.match regexp path != null;
@@ -49,6 +59,7 @@
 
         commonArgs = {
           inherit src;
+          nativeBuildInputs = missingSysPkgs;
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
