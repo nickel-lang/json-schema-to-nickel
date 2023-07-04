@@ -30,10 +30,10 @@ fn translation_typecheck_test(
     test_case: TestCase,
 ) {
     let contract = if test_case.schema.is_object() {
-        json_schema_to_nickel::root_schema(dbg!(serde_json::from_value(test_case.schema).unwrap()))
+        json_schema_to_nickel::root_schema(&dbg!(serde_json::from_value(test_case.schema).unwrap()))
     } else {
         json_schema_to_nickel::wrap_predicate(
-            json_schema_to_nickel::schema_to_predicate(dbg!(serde_json::from_value(
+            json_schema_to_nickel::schema_to_predicate(&dbg!(serde_json::from_value(
                 test_case.schema
             )
             .unwrap())),

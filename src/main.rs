@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|(Width(w), _)| w as usize)
         .unwrap_or(80);
 
-    let types: DocBuilder<'_, _, ()> = root_schema(schema).pretty(&pretty::BoxAllocator);
+    let types: DocBuilder<'_, _, ()> = root_schema(&schema).pretty(&pretty::BoxAllocator);
 
     types.render(size, &mut stdout())?;
 
