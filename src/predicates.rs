@@ -11,8 +11,10 @@ use schemars::schema::{
 };
 use serde_json::Value;
 
-fn or_always(s: Option<&Schema>) -> RichTerm {
-    s.map(schema_to_predicate)
+use crate::definitions::Environment;
+
+fn or_always(env: &Environment, s: Option<&Schema>) -> RichTerm {
+    s.map(|s| schema_to_predicate(env, s))
         .unwrap_or(make::var("predicates.always"))
 }
 
@@ -88,7 +90,10 @@ fn mk_any_of(schemas: impl IntoIterator<Item = RichTerm>) -> RichTerm {
     }
 }
 
-fn subschema_predicates(subschemas: &SubschemaValidation) -> impl Iterator<Item = RichTerm> {
+fn subschema_predicates(
+    env: &Environment,
+    subschemas: &SubschemaValidation,
+) -> impl Iterator<Item = RichTerm> {
     let SubschemaValidation {
         all_of,
         any_of,
@@ -101,12 +106,12 @@ fn subschema_predicates(subschemas: &SubschemaValidation) -> impl Iterator<Item 
 
     let all_of = all_of
         .as_deref()
-        .map(|schemas| mk_all_of(schemas.iter().map(schema_to_predicate)))
+        .map(|schemas| mk_all_of(schemas.iter().map(|s| schema_to_predicate(env, s))))
         .into_iter();
 
     let any_of = any_of
         .as_deref()
-        .map(|schemas| mk_any_of(schemas.iter().map(schema_to_predicate)))
+        .map(|schemas| mk_any_of(schemas.iter().map(|s| schema_to_predicate(env, s))))
         .into_iter();
 
     let one_of = one_of
@@ -115,7 +120,12 @@ fn subschema_predicates(subschemas: &SubschemaValidation) -> impl Iterator<Item 
             mk_app!(
                 make::var("predicates.oneOf"),
                 Term::Array(
-                    Array::new(schemas.iter().map(schema_to_predicate).collect()),
+                    Array::new(
+                        schemas
+                            .iter()
+                            .map(|s| schema_to_predicate(env, s))
+                            .collect()
+                    ),
                     Default::default()
                 )
             )
@@ -124,7 +134,7 @@ fn subschema_predicates(subschemas: &SubschemaValidation) -> impl Iterator<Item 
 
     let not = not
         .as_deref()
-        .map(|s| mk_app!(make::var("predicates.not"), schema_to_predicate(s)))
+        .map(|s| mk_app!(make::var("predicates.not"), schema_to_predicate(env, s)))
         .into_iter();
 
     let ite = if_schema
@@ -132,9 +142,9 @@ fn subschema_predicates(subschemas: &SubschemaValidation) -> impl Iterator<Item 
         .map(move |if_schema| {
             mk_app!(
                 make::var("predicates.ifThenElse"),
-                schema_to_predicate(if_schema),
-                or_always(then_schema.as_deref()),
-                or_always(else_schema.as_deref())
+                schema_to_predicate(env, if_schema),
+                or_always(env, then_schema.as_deref()),
+                or_always(env, else_schema.as_deref())
             )
         })
         .into_iter();
@@ -210,7 +220,7 @@ fn string_predicates(sv: &StringValidation) -> impl Iterator<Item = RichTerm> {
     max_length.chain(min_length).chain(pattern)
 }
 
-fn array_predicates(av: &ArrayValidation) -> impl Iterator<Item = RichTerm> {
+fn array_predicates(env: &Environment, av: &ArrayValidation) -> impl Iterator<Item = RichTerm> {
     let ArrayValidation {
         items,
         additional_items,
@@ -224,14 +234,19 @@ fn array_predicates(av: &ArrayValidation) -> impl Iterator<Item = RichTerm> {
         None => vec![],
         Some(SingleOrVec::Single(s)) => vec![mk_app!(
             make::var("predicates.arrays.arrayOf"),
-            schema_to_predicate(s)
+            schema_to_predicate(env, s)
         )],
         Some(SingleOrVec::Vec(schemas)) => {
             let len = schemas.len();
             [mk_app!(
                 make::var("predicates.arrays.items"),
                 Term::Array(
-                    Array::new(schemas.iter().map(schema_to_predicate).collect()),
+                    Array::new(
+                        schemas
+                            .iter()
+                            .map(|s| schema_to_predicate(env, s))
+                            .collect()
+                    ),
                     Default::default()
                 )
             )]
@@ -239,7 +254,7 @@ fn array_predicates(av: &ArrayValidation) -> impl Iterator<Item = RichTerm> {
             .chain(additional_items.as_deref().map(|s| {
                 mk_app!(
                     make::var("predicates.arrays.additionalItems"),
-                    schema_to_predicate(s),
+                    schema_to_predicate(env, s),
                     Term::Num(len.into())
                 )
             }))
@@ -265,7 +280,7 @@ fn array_predicates(av: &ArrayValidation) -> impl Iterator<Item = RichTerm> {
         .map(|s| {
             mk_app!(
                 make::var("predicates.arrays.contains"),
-                schema_to_predicate(s)
+                schema_to_predicate(env, s)
             )
         })
         .into_iter();
@@ -277,7 +292,7 @@ fn array_predicates(av: &ArrayValidation) -> impl Iterator<Item = RichTerm> {
         .chain(contains)
 }
 
-fn object_predicates(ov: &ObjectValidation) -> impl Iterator<Item = RichTerm> {
+fn object_predicates(env: &Environment, ov: &ObjectValidation) -> impl Iterator<Item = RichTerm> {
     let ObjectValidation {
         max_properties,
         min_properties,
@@ -311,7 +326,7 @@ fn object_predicates(ov: &ObjectValidation) -> impl Iterator<Item = RichTerm> {
         .map(|s| {
             mk_app!(
                 make::var("predicates.records.propertyNames"),
-                schema_to_predicate(s)
+                schema_to_predicate(env, s)
             )
         })
         .into_iter();
@@ -341,20 +356,20 @@ fn object_predicates(ov: &ObjectValidation) -> impl Iterator<Item = RichTerm> {
         Term::Record(RecordData::with_field_values(
             properties
                 .iter()
-                .map(|(k, v)| (k.into(), schema_to_predicate(v)))
+                .map(|(k, v)| (k.into(), schema_to_predicate(env, v)))
                 .collect()
         )),
         Term::Record(RecordData::with_field_values(
             pattern_properties
                 .iter()
-                .map(|(k, v)| (k.into(), schema_to_predicate(v)))
+                .map(|(k, v)| (k.into(), schema_to_predicate(env, v)))
                 .collect()
         )),
         Term::Bool(!matches!(
             additional_properties.as_deref(),
             Some(Schema::Bool(false))
         )),
-        or_always(additional_properties.as_deref())
+        or_always(env, additional_properties.as_deref())
     )]
     .into_iter();
 
@@ -378,7 +393,10 @@ fn reference_to_predicate(reference: &str) -> RichTerm {
     }
 }
 
-fn dependencies(extensions: &BTreeMap<String, Value>) -> impl Iterator<Item = RichTerm> {
+fn dependencies(
+    env: &Environment,
+    extensions: &BTreeMap<String, Value>,
+) -> impl Iterator<Item = RichTerm> {
     extensions
         .get("dependencies")
         .and_then(|v| v.as_object())
@@ -406,7 +424,7 @@ fn dependencies(extensions: &BTreeMap<String, Value>) -> impl Iterator<Item = Ri
                                 .into()
                             } else {
                                 serde_json::from_value::<Schema>(value.clone())
-                                    .map(|s| schema_to_predicate(&s))
+                                    .map(|s| schema_to_predicate(env, &s))
                                     .unwrap()
                             }
                         ))
@@ -417,7 +435,7 @@ fn dependencies(extensions: &BTreeMap<String, Value>) -> impl Iterator<Item = Ri
         .into_iter()
 }
 
-pub fn schema_object_to_predicate(o: &SchemaObject) -> RichTerm {
+pub fn schema_object_to_predicate(env: &Environment, o: &SchemaObject) -> RichTerm {
     let SchemaObject {
         metadata: _,
         instance_type,
@@ -438,20 +456,20 @@ pub fn schema_object_to_predicate(o: &SchemaObject) -> RichTerm {
             .map(types_to_predicate)
             .chain(enum_values.as_deref().map(enum_to_predicate))
             .chain(const_value.as_ref().map(const_to_predicate))
-            .chain(subschemas.iter().flat_map(|s| subschema_predicates(s)))
+            .chain(subschemas.iter().flat_map(|s| subschema_predicates(env, s)))
             .chain(number.iter().flat_map(|nv| number_predicates(nv)))
             .chain(string.iter().flat_map(|sv| string_predicates(sv)))
-            .chain(array.iter().flat_map(|av| array_predicates(av)))
-            .chain(object.iter().flat_map(|ov| object_predicates(ov)))
+            .chain(array.iter().flat_map(|av| array_predicates(env, av)))
+            .chain(object.iter().flat_map(|ov| object_predicates(env, ov)))
             .chain(reference.as_deref().map(reference_to_predicate))
-            .chain(dependencies(extensions)),
+            .chain(dependencies(env, extensions)),
     )
 }
 
-pub fn schema_to_predicate(schema: &Schema) -> RichTerm {
+pub fn schema_to_predicate(env: &Environment, schema: &Schema) -> RichTerm {
     match schema {
         Schema::Bool(true) => make::var("predicates.always"),
         Schema::Bool(false) => make::var("predicates.never"),
-        Schema::Object(o) => schema_object_to_predicate(o),
+        Schema::Object(o) => schema_object_to_predicate(env, o),
     }
 }

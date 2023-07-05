@@ -1,5 +1,8 @@
 pub mod contracts;
+pub mod definitions;
 pub mod predicates;
+
+use std::collections::HashMap;
 
 use contracts::schema_object_to_contract;
 use nickel_lang_core::{
@@ -15,14 +18,19 @@ use predicates::{schema_object_to_predicate, schema_to_predicate};
 use schemars::schema::RootSchema;
 
 pub fn root_schema(root: &RootSchema) -> RichTerm {
-    let definitions = root
-        .definitions
-        .iter()
-        .map(|(name, schema)| (Ident::from(name), Field::from(schema_to_predicate(schema))));
-    if let Some(contract) = schema_object_to_contract(&root.schema) {
+    let definitions = root.definitions.iter().map(|(name, schema)| {
+        (
+            Ident::from(name),
+            Field::from(schema_to_predicate(&HashMap::new(), schema)),
+        )
+    });
+    if let Some(contract) = schema_object_to_contract(&HashMap::new(), &root.schema) {
         wrap_contract(contract, definitions)
     } else {
-        wrap_predicate(schema_object_to_predicate(&root.schema), definitions)
+        wrap_predicate(
+            schema_object_to_predicate(&HashMap::new(), &root.schema),
+            definitions,
+        )
     }
 }
 

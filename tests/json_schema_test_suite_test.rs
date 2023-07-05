@@ -1,4 +1,4 @@
-use std::io::stderr;
+use std::{collections::HashMap, io::stderr};
 
 use json_schema_test_suite::{json_schema_test_suite, TestCase};
 use json_schema_to_nickel::{predicates::schema_to_predicate, root_schema, wrap_predicate};
@@ -34,7 +34,10 @@ fn translation_typecheck_test(
         root_schema(&dbg!(serde_json::from_value(test_case.schema).unwrap()))
     } else {
         wrap_predicate(
-            schema_to_predicate(&dbg!(serde_json::from_value(test_case.schema).unwrap())),
+            schema_to_predicate(
+                &HashMap::new(),
+                &dbg!(serde_json::from_value(test_case.schema).unwrap()),
+            ),
             std::iter::empty(),
         )
     };

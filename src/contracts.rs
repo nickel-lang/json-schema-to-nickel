@@ -12,7 +12,7 @@ use nickel_lang_core::{
 };
 use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec};
 
-use crate::predicates::schema_to_predicate;
+use crate::{definitions::Environment, predicates::schema_to_predicate};
 
 fn type_to_contract(x: InstanceType) -> RichTerm {
     match x {
@@ -69,7 +69,7 @@ pub fn schema_object_to_nickel_type(schema: &SchemaObject) -> Option<LabeledType
     }
 }
 
-pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
+pub fn schema_object_to_contract(env: &Environment, schema: &SchemaObject) -> Option<RichTerm> {
     let Some(ov) = (match schema {
         SchemaObject {
             metadata: _,
@@ -117,6 +117,7 @@ pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
             },
             None | Some(Schema::Bool(_)),
         ) if pattern_properties.is_empty() => Some(generate_record_contract(
+            env,
             required,
             properties,
             open_record(additional_properties.as_deref()),
@@ -126,6 +127,7 @@ pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
 }
 
 fn generate_record_contract(
+    env: &Environment,
     required: &BTreeSet<String>,
     properties: &BTreeMap<String, Schema>,
     open: bool,
@@ -144,7 +146,7 @@ fn generate_record_contract(
             Schema::Object(obj) => {
                 if let Some(t) = schema_object_to_nickel_type(obj) {
                     vec![t]
-                } else if let Some(term) = schema_object_to_contract(obj) {
+                } else if let Some(term) = schema_object_to_contract(env, obj) {
                     vec![LabeledType {
                         types: TypeF::Flat(term).into(),
                         label: Label::dummy(),
@@ -153,7 +155,7 @@ fn generate_record_contract(
                     vec![LabeledType {
                         types: TypeF::Flat(mk_app!(
                             make::var("predicates.contract_from_predicate"),
-                            schema_to_predicate(schema)
+                            schema_to_predicate(env, schema)
                         ))
                         .into(),
                         label: Label::dummy(),
