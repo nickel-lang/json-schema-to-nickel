@@ -7,6 +7,10 @@
       url = "github:ipetkov/crane";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     nickel = {
       url = "github:tweag/nickel";
@@ -31,7 +35,8 @@
     in
     forSystems SYSTEMS (system: pkgs:
       let
-        craneLib = inputs.crane.mkLib pkgs;
+        rust = inputs.fenix.packages.${system}.stable;
+        craneLib = (inputs.crane.mkLib pkgs).overrideToolchain rust.toolchain;
 
         missingSysPkgs =
           if pkgs.stdenv.isDarwin then
@@ -92,12 +97,10 @@
 
         devShells.${system}.default = pkgs.mkShell {
           inputsFrom = lib.attrValues inputs.self.checks.${system};
-          packages = with pkgs; [
-            cargo-watch
+          packages = [
+            rust.rust-analyzer
             inputs.topiary.packages.${system}.default
             inputs.nickel.packages.${system}.default
-            rust-analyzer
-            rustfmt
           ];
         };
       });
