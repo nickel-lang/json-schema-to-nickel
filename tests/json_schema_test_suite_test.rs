@@ -1,7 +1,9 @@
-use std::{collections::HashMap, io::stderr};
+use std::io::stderr;
 
 use json_schema_test_suite::{json_schema_test_suite, TestCase};
-use json_schema_to_nickel::{predicates::schema_to_predicate, root_schema, wrap_predicate};
+use json_schema_to_nickel::{
+    definitions::Environment, predicates::schema_to_predicate, root_schema, wrap_predicate,
+};
 use nickel_lang_core::{eval::cache::lazy::CBNCache, program::Program, term::RichTerm};
 use stringreader::StringReader;
 
@@ -34,11 +36,11 @@ fn translation_typecheck_test(
         root_schema(&dbg!(serde_json::from_value(test_case.schema).unwrap()))
     } else {
         wrap_predicate(
+            Environment::empty(),
             schema_to_predicate(
-                &HashMap::new(),
+                &Default::default(),
                 &dbg!(serde_json::from_value(test_case.schema).unwrap()),
             ),
-            std::iter::empty(),
         )
     };
 

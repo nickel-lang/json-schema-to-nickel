@@ -6,20 +6,20 @@ use nickel_lang_core::{
     term::{
         make,
         record::{Field, FieldMetadata, RecordAttrs, RecordData},
-        LabeledType, RichTerm, Term, TypeAnnotation,
+        LabeledType, RichTerm, Term, TypeAnnotation, UnaryOp,
     },
     types::{TypeF, Types},
 };
 use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec};
 
-use crate::{definitions::Environment, predicates::schema_to_predicate};
+use crate::{definitions::References, predicates::schema_to_predicate};
 
 fn type_to_contract(x: InstanceType) -> RichTerm {
     match x {
-        InstanceType::Null => mk_app!(
-            make::var("predicates.contract_from_predicate"),
-            mk_app!(make::var("predicates.isType"), Term::Enum("Null".into()))
-        ),
+        InstanceType::Null => contract_from_predicate(mk_app!(
+            make::var("predicates.isType"),
+            Term::Enum("Null".into())
+        )),
         InstanceType::Boolean => make::var("Bool"),
         InstanceType::Object => Term::Record(RecordData {
             attrs: RecordAttrs { open: true },
@@ -69,7 +69,7 @@ pub fn schema_object_to_nickel_type(schema: &SchemaObject) -> Option<LabeledType
     }
 }
 
-pub fn schema_object_to_contract(env: &Environment, schema: &SchemaObject) -> Option<RichTerm> {
+pub fn schema_object_to_contract(env: &References, schema: &SchemaObject) -> Option<RichTerm> {
     let Some(ov) = (match schema {
         SchemaObject {
             metadata: _,
@@ -82,9 +82,23 @@ pub fn schema_object_to_contract(env: &Environment, schema: &SchemaObject) -> Op
             string: None,
             array: None,
             object: ov,
-            reference: None, // TODO(vkleen): We should be able to relax this once we properly track references
+            reference: None,
             extensions,
         } if **instance_type == InstanceType::Object && extensions.is_empty() => ov,
+        SchemaObject {
+            metadata: _,
+            instance_type: None,
+            format: None,
+            enum_values: None,
+            const_value: None,
+            subschemas: None,
+            number: None,
+            string: None,
+            array: None,
+            object: None,
+            reference: Some(reference),
+            extensions,
+        } if extensions.is_empty() => return Some(env.reference(reference).contract.clone()),
         _ => return None,
     }) else {
         return Some(
@@ -126,8 +140,15 @@ pub fn schema_object_to_contract(env: &Environment, schema: &SchemaObject) -> Op
     }
 }
 
+pub fn schema_to_contract(env: &References, schema: &Schema) -> Option<RichTerm> {
+    match schema {
+        Schema::Bool(_) => None,
+        Schema::Object(obj) => schema_object_to_contract(env, obj),
+    }
+}
+
 fn generate_record_contract(
-    env: &Environment,
+    env: &References,
     required: &BTreeSet<String>,
     properties: &BTreeMap<String, Schema>,
     open: bool,
@@ -135,11 +156,7 @@ fn generate_record_contract(
     let fields = properties.iter().map(|(name, schema)| {
         let contracts = match schema {
             Schema::Bool(false) => vec![LabeledType {
-                types: TypeF::Flat(mk_app!(
-                    make::var("predicates.contract_from_predicate"),
-                    make::var("predicates.never")
-                ))
-                .into(),
+                types: TypeF::Flat(contract_from_predicate(make::var("predicates.never"))).into(),
                 label: Label::dummy(),
             }],
             Schema::Bool(true) => vec![],
@@ -153,10 +170,9 @@ fn generate_record_contract(
                     }]
                 } else {
                     vec![LabeledType {
-                        types: TypeF::Flat(mk_app!(
-                            make::var("predicates.contract_from_predicate"),
-                            schema_to_predicate(env, schema)
-                        ))
+                        types: TypeF::Flat(contract_from_predicate(schema_to_predicate(
+                            env, schema,
+                        )))
                         .into(),
                         label: Label::dummy(),
                     }]
@@ -187,4 +203,14 @@ fn generate_record_contract(
         ..Default::default()
     })
     .into()
+}
+
+pub fn contract_from_predicate(predicate: RichTerm) -> RichTerm {
+    mk_app!(
+        make::op1(
+            UnaryOp::StaticAccess("contract_from_predicate".into()),
+            make::var("predicates")
+        ),
+        predicate
+    )
 }
