@@ -10,7 +10,7 @@ let Schema = import "./test.schema.ncl" in
   },
   my_nullable_enum = {
     StructVariant = {
-      ints = [1, 2, 3]
+      floats = [1, 2, 3]
     }
   },
 } | Schema
