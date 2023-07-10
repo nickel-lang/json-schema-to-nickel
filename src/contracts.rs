@@ -110,7 +110,7 @@ pub fn schema_object_to_contract(env: &References, schema: &SchemaObject) -> Opt
         );
     };
 
-    fn open_record(additional: Option<&Schema>) -> bool {
+    fn is_open_record(additional: Option<&Schema>) -> bool {
         match additional {
             Some(Schema::Bool(open)) => *open,
             None => true,
@@ -134,7 +134,7 @@ pub fn schema_object_to_contract(env: &References, schema: &SchemaObject) -> Opt
             env,
             required,
             properties,
-            open_record(additional_properties.as_deref()),
+            is_open_record(additional_properties.as_deref()),
         )),
         _ => None,
     }
