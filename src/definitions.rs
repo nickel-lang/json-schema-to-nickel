@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use nickel_lang_core::{
     identifier::Ident,
-    term::{make, record::RecordData, LetAttrs, RichTerm, Term, UnaryOp},
+    term::{make, record::RecordData, LetAttrs, RichTerm, Term},
 };
 use schemars::schema::Schema;
 
@@ -62,24 +62,12 @@ impl References {
             fields
                 .into_iter()
                 .map(|n| {
-                    let id = Ident::from(n.as_ref());
+                    let id = n.as_ref();
                     (
-                        String::from(n.as_ref()),
+                        String::from(id),
                         Access {
-                            contract: make::op1(
-                                UnaryOp::StaticAccess(id),
-                                make::op1(
-                                    UnaryOp::StaticAccess("contract".into()),
-                                    make::var("definitions"),
-                                ),
-                            ),
-                            predicate: make::op1(
-                                UnaryOp::StaticAccess(id),
-                                make::op1(
-                                    UnaryOp::StaticAccess("predicate".into()),
-                                    make::var("definitions"),
-                                ),
-                            ),
+                            contract: make::static_access_("definitions", ["contract", id]),
+                            predicate: make::static_access_("definitions", ["predicate", id]),
                         },
                     )
                 })
