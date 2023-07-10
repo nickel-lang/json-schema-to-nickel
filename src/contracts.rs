@@ -182,18 +182,15 @@ fn generate_record_contract(
         (
             name.into(),
             Field {
-                value: None,
                 metadata: FieldMetadata {
-                    doc: None,
                     annotation: TypeAnnotation {
                         types: None,
                         contracts,
                     },
                     opt: !required.contains(name),
-                    not_exported: false,
-                    priority: Default::default(),
+                    ..Default::default()
                 },
-                pending_contracts: Vec::new(),
+                ..Default::default()
             },
         )
     });
