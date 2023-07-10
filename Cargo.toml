@@ -11,7 +11,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 clap = { version = "^4.3", features = ["derive"] }
-nickel-lang-core = { git = "https://github.com/tweag/nickel", rev = "f98bc156563a29133a41696ec30dc44330ccf29d", default-features = false }
+nickel-lang-core = { git = "https://github.com/tweag/nickel", rev = "ec3b9c4a35bced37d321a01636b80b4f91533924", default-features = false }
 pretty = "^0.11"
 schemars = "^0.8"
 serde_json = "^1.0"
