@@ -430,6 +430,8 @@ pub fn schema_object_to_predicate(o: &SchemaObject) -> RichTerm {
         instance_type
             .iter()
             .map(types_to_predicate)
+            // XXX: they could all be set, even though they seem mutually exclusive
+            // ANDed together
             .chain(enum_values.as_deref().map(enum_to_predicate))
             .chain(const_value.as_ref().map(const_to_predicate))
             .chain(subschemas.iter().flat_map(|s| subschema_predicates(s)))
@@ -442,6 +444,7 @@ pub fn schema_object_to_predicate(o: &SchemaObject) -> RichTerm {
                     .as_deref()
                     .map(|r| definitions::reference(r).predicate),
             )
+            // XXX schema.rs parses this incorrectly, so we have to correct for it
             .chain(dependencies(extensions)),
     )
 }

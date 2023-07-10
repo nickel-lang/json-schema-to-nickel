@@ -50,6 +50,8 @@ use crate::{definitions, predicates::schema_to_predicate, utils::static_access};
 /// appear inlined into the term. To address this problem, we use `Term::Var`
 /// and rely on the pretty printer not understanding that builtin type names are
 /// not valid identifiers.
+// XXX literally wouldn't be able to parse it
+// XXX: only being used in type_to_nickel_type
 fn type_to_contract(x: InstanceType) -> RichTerm {
     match x {
         InstanceType::Null => contract_from_predicate(mk_app!(
@@ -69,6 +71,7 @@ fn type_to_contract(x: InstanceType) -> RichTerm {
     }
 }
 
+// XXX example of use
 fn type_to_nickel_type(x: InstanceType) -> LabeledType {
     let types = match x {
         InstanceType::Boolean => TypeF::Bool.into(),
@@ -109,6 +112,8 @@ pub fn schema_object_to_nickel_type(schema: &SchemaObject) -> Option<LabeledType
 
 /// Convert a JSON schema object into a record contract, when possible.
 pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
+    // XXX explain weird pattern match
+    // XXX put what these look like in a json schema
     let Some(ov) = (match schema {
         SchemaObject {
             metadata: _,
@@ -157,6 +162,7 @@ pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
         }
     }
 
+    // XXX explain weird pattern match
     match (ov.as_ref(), ov.additional_properties.as_deref()) {
         (
             ObjectValidation {
@@ -192,6 +198,7 @@ fn generate_record_contract(
     open: bool,
 ) -> RichTerm {
     let fields = properties.iter().map(|(name, schema)| {
+        // XXX say why we don't just recurse immediately
         let contracts = match schema {
             Schema::Bool(false) => vec![LabeledType {
                 types: TypeF::Flat(contract_from_predicate(static_access(

@@ -23,7 +23,7 @@ use stringreader::StringReader;
     "optional_ecmascript_regex_.*",
     "optional_float_overflow_0_0", // pretty printer outputs scientific notation numbers which Nickel doesn't support
     "multipleOf_4_0", // pretty printer outputs scientific notation numbers which Nickel doesn't support
-    "refRemote_.*",
+    "refRemote_.*", // no.
     "ref_.*", // TODO: make reference handling robust
     "unknownKeyword_.*", // we don't handle `$id` at all, yet
 })]
@@ -43,6 +43,8 @@ fn translation_typecheck_test(
 
     let instance: RichTerm = serde_json::from_value(test_case.instance).unwrap();
 
+    // XXX: this assumes `./lib/predicates.nix` is accessible from the working
+    // directory
     let program = format!("{} | ({})", instance, contract);
     eprintln!("{}", program);
 
