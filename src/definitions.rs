@@ -1,3 +1,16 @@
+//! # Reference handling for JSON schema
+//!
+//! JSON schemas can contain a set of definitions at the top level and
+//! references to other schemas at essentially arbitrary points. The general
+//! format of JSON schema references is quite general. For example, it would be
+//! possible to reference fields in a schema hosted at a remote URI. We don't
+//! want to support the general case but we need a way of dealing with
+//! references to top-level definitions in a schema.
+//!
+//! This module handles an [`Environment`] data structure that keeps track of
+//! top-level definitions in a JSON schema and their mapping to [`RichTerm`]s
+//! for accessing them.
+
 use std::collections::{BTreeMap, HashMap};
 
 use nickel_lang_core::{
@@ -11,21 +24,28 @@ use crate::{
     predicates::schema_to_predicate,
 };
 
+/// The predicate and contract generated for a schema.
 #[derive(Clone)]
 pub struct Terms {
     predicate: RichTerm,
     contract: RichTerm,
 }
 
+/// The field access for referencing the predicate or contract generated from a
+/// schema in other Nickel code.
 #[derive(Clone)]
 pub struct Access {
     pub predicate: RichTerm,
     pub contract: RichTerm,
 }
 
+/// A newtype around [`HashMap`] for keeping track of the Nickel code for
+/// referencing top level schema definitions.
 #[derive(Clone, Default)]
 pub struct References(HashMap<String, Access>);
 
+/// An environment of top level schema definitions and their conversions into
+/// Nickel predicates and contracts.
 #[derive(Clone, Default)]
 pub struct Environment {
     accesses: References,
@@ -89,10 +109,14 @@ impl References {
 }
 
 impl Environment {
+    /// The empty environment
     pub fn empty() -> Self {
         Self::default()
     }
 
+    /// Wrap a Nickel [`RichTerm`] in a let binding containing the definitions
+    /// from the environment. This is necessary for the Nickel access terms
+    /// tracked in the environment to actually work.
     pub fn wrap(self, inner: RichTerm) -> RichTerm {
         let contracts = self
             .terms
@@ -130,6 +154,7 @@ impl Environment {
         .into()
     }
 
+    /// Extract just the Nickel field references
     pub fn references(&self) -> &References {
         &self.accesses
     }

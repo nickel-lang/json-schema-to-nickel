@@ -1,3 +1,30 @@
+//! # Nickel contract generation for certain JSON schemas
+//!
+//! Since generating lazy Nickel contracts for arbitrary JSON schemas is
+//! impossible, this module restricts itself to generating record contracts for
+//! JSON schemas that are simple enough. A JSON schema can be successfully
+//! turned into a record contract if it takes the form
+//!
+//! ```json
+//! {
+//!   "type": "object",
+//!   "required": ...,
+//!   "properties": {
+//!     ...
+//!   }
+//! }
+//! ```
+//!
+//! Schemas specifying a single primitive type are turned into proper contracts
+//! as well, for example
+//!
+//! ```json
+//! {
+//!   "type": "boolean"
+//! }
+//! ```
+//!
+//! is turned into the Nickel type `Bool`.
 use std::collections::{BTreeMap, BTreeSet};
 
 use nickel_lang_core::{
@@ -14,6 +41,15 @@ use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, Sin
 
 use crate::{definitions::References, predicates::schema_to_predicate};
 
+/// Convert an [`InstanceType`] into a Nickel [`RichTerm`]. Currently,
+/// `RichTerm` doesn't include a variant for embedding Nickel types into terms.
+/// Instead, in Nickel itself, the parser turns types that appear in term
+/// position into their contracts immediately. We could do the same thing here,
+/// but the resulting `RichTerm` would not be pretty printed in a useful way.
+/// Instead, the various internal contracts used in the Nickel interpreter would
+/// appear inlined into the term. To address this problem, we use `Term::Var`
+/// and rely on the pretty printer not understanding that builtin type names are
+/// not valid identifiers.
 fn type_to_contract(x: InstanceType) -> RichTerm {
     match x {
         InstanceType::Null => contract_from_predicate(mk_app!(
@@ -49,6 +85,7 @@ fn type_to_nickel_type(x: InstanceType) -> LabeledType {
     }
 }
 
+/// Convert a JSON schema object into a Nickel [`LabeledType`], when possible.
 pub fn schema_object_to_nickel_type(schema: &SchemaObject) -> Option<LabeledType> {
     match schema {
         SchemaObject {
@@ -62,13 +99,15 @@ pub fn schema_object_to_nickel_type(schema: &SchemaObject) -> Option<LabeledType
             string: None,
             array: None,
             object: None,
-            reference: None, // TODO(vkleen): We should be able to relax this once we properly track references
+            reference: None, /* TODO(vkleen): We should be able to relax this once we properly
+                              * track references */
             extensions,
         } if extensions.is_empty() => Some(type_to_nickel_type(**instance_type)),
         _ => None,
     }
 }
 
+/// Convert a JSON schema object into a record contract, when possible.
 pub fn schema_object_to_contract(env: &References, schema: &SchemaObject) -> Option<RichTerm> {
     let Some(ov) = (match schema {
         SchemaObject {
@@ -140,6 +179,7 @@ pub fn schema_object_to_contract(env: &References, schema: &SchemaObject) -> Opt
     }
 }
 
+/// Convert a JSON schema into a Nickel record contract, when possible.
 pub fn schema_to_contract(env: &References, schema: &Schema) -> Option<RichTerm> {
     match schema {
         Schema::Bool(_) => None,
@@ -202,6 +242,8 @@ fn generate_record_contract(
     .into()
 }
 
+/// Convert `predicate` into a contract, suitable for use in a contract
+/// assertion `term | Contract`.
 pub fn contract_from_predicate(predicate: RichTerm) -> RichTerm {
     mk_app!(
         make::op1(
