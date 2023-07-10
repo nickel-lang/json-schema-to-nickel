@@ -23,29 +23,16 @@ pub struct Access {
     pub contract: RichTerm,
 }
 
-#[derive(Clone)]
-pub struct EnvironmentF<T>(HashMap<String, T>);
-pub type References = EnvironmentF<Access>;
+#[derive(Clone, Default)]
+pub struct References(HashMap<String, Access>);
 
 #[derive(Clone, Default)]
 pub struct Environment {
-    accesses: EnvironmentF<Access>,
-    terms: EnvironmentF<Terms>,
+    accesses: References,
+    terms: HashMap<String, Terms>,
 }
 
-impl<T> Default for EnvironmentF<T> {
-    fn default() -> Self {
-        EnvironmentF(Default::default())
-    }
-}
-
-impl<T> EnvironmentF<T> {
-    pub fn empty() -> Self {
-        Self::default()
-    }
-}
-
-impl EnvironmentF<Access> {
+impl References {
     fn with_fields<'a, F, I>(fields: F) -> Self
     where
         F: 'a + IntoIterator<Item = I>,
@@ -109,13 +96,11 @@ impl Environment {
     pub fn wrap(self, inner: RichTerm) -> RichTerm {
         let contracts = self
             .terms
-            .0
             .iter()
             .map(|(k, v)| (Ident::from(k), v.contract.clone()))
             .collect();
         let predicates = self
             .terms
-            .0
             .into_iter()
             .map(|(k, v)| (Ident::from(k), v.predicate))
             .collect();
@@ -153,26 +138,25 @@ impl Environment {
 impl From<&BTreeMap<String, Schema>> for Environment {
     fn from(defs: &BTreeMap<String, Schema>) -> Self {
         let accesses = References::with_fields(defs.keys());
-        let terms = EnvironmentF(
-            defs.iter()
-                .map(|(name, schema)| {
-                    let predicate = schema_to_predicate(&accesses, schema);
-                    (
-                        name.clone(),
-                        Terms {
-                            contract: schema_to_contract(&accesses, schema).unwrap_or_else(|| {
-                                contract_from_predicate(
-                                    accesses
-                                        .get_predicate(name)
-                                        .expect("accesses has the correct keys by construction"),
-                                )
-                            }),
-                            predicate,
-                        },
-                    )
-                })
-                .collect(),
-        );
+        let terms = defs
+            .iter()
+            .map(|(name, schema)| {
+                let predicate = schema_to_predicate(&accesses, schema);
+                (
+                    name.clone(),
+                    Terms {
+                        contract: schema_to_contract(&accesses, schema).unwrap_or_else(|| {
+                            contract_from_predicate(
+                                accesses
+                                    .get_predicate(name)
+                                    .expect("accesses has the correct keys by construction"),
+                            )
+                        }),
+                        predicate,
+                    },
+                )
+            })
+            .collect();
         Environment { accesses, terms }
     }
 }
