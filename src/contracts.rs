@@ -39,7 +39,7 @@ use nickel_lang_core::{
 };
 use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec};
 
-use crate::{definitions::References, predicates::schema_to_predicate};
+use crate::{definitions::References, predicates::schema_to_predicate, utils::static_access_};
 
 /// Convert an [`InstanceType`] into a Nickel [`RichTerm`]. Currently,
 /// `RichTerm` doesn't include a variant for embedding Nickel types into terms.
@@ -53,7 +53,7 @@ use crate::{definitions::References, predicates::schema_to_predicate};
 fn type_to_contract(x: InstanceType) -> RichTerm {
     match x {
         InstanceType::Null => contract_from_predicate(mk_app!(
-            make::static_access_("predicates", ["isType"]),
+            static_access_("predicates", ["isType"]),
             Term::Enum("Null".into())
         )),
         InstanceType::Boolean => make::var("Bool"),
@@ -65,7 +65,7 @@ fn type_to_contract(x: InstanceType) -> RichTerm {
         InstanceType::Array => mk_app!(make::var("Array"), make::var("Dyn")),
         InstanceType::Number => make::var("Number"),
         InstanceType::String => make::var("String"),
-        InstanceType::Integer => make::static_access_("std", ["number", "Integer"]),
+        InstanceType::Integer => static_access_("std", ["number", "Integer"]),
     }
 }
 
@@ -196,7 +196,7 @@ fn generate_record_contract(
     let fields = properties.iter().map(|(name, schema)| {
         let contracts = match schema {
             Schema::Bool(false) => vec![LabeledType {
-                types: TypeF::Flat(contract_from_predicate(make::static_access_(
+                types: TypeF::Flat(contract_from_predicate(static_access_(
                     "predicates",
                     ["never"],
                 )))
@@ -250,7 +250,7 @@ fn generate_record_contract(
 /// assertion `term | Contract`.
 pub fn contract_from_predicate(predicate: RichTerm) -> RichTerm {
     mk_app!(
-        make::static_access_("predicates", ["contract_from_predicate"]),
+        static_access_("predicates", ["contract_from_predicate"]),
         predicate
     )
 }

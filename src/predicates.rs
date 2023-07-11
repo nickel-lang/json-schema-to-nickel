@@ -11,11 +11,11 @@ use schemars::schema::{
 };
 use serde_json::Value;
 
-use crate::definitions::References;
+use crate::{definitions::References, utils::static_access_};
 
 fn or_always(env: &References, s: Option<&Schema>) -> RichTerm {
     s.map(|s| schema_to_predicate(env, s))
-        .unwrap_or(make::static_access_("predicates", ["always"]))
+        .unwrap_or(static_access_("predicates", ["always"]))
 }
 
 fn type_to_predicate(x: InstanceType) -> RichTerm {
@@ -28,14 +28,14 @@ fn type_to_predicate(x: InstanceType) -> RichTerm {
         InstanceType::String => Term::Enum("String".into()),
         InstanceType::Integer => Term::Enum("Integer".into()),
     };
-    mk_app!(make::static_access_("predicates", ["isType"]), type_tag)
+    mk_app!(static_access_("predicates", ["isType"]), type_tag)
 }
 
 fn types_to_predicate(x: &SingleOrVec<InstanceType>) -> RichTerm {
     match x {
         SingleOrVec::Single(t) => type_to_predicate(**t),
         SingleOrVec::Vec(ts) => mk_app!(
-            make::static_access_("predicates", ["anyOf"]),
+            static_access_("predicates", ["anyOf"]),
             Term::Array(
                 Array::new(ts.iter().map(|t| type_to_predicate(*t)).collect()),
                 Default::default()
@@ -46,7 +46,7 @@ fn types_to_predicate(x: &SingleOrVec<InstanceType>) -> RichTerm {
 
 fn enum_to_predicate(vs: &[Value]) -> RichTerm {
     mk_app!(
-        make::static_access_("predicates", ["enum"]),
+        static_access_("predicates", ["enum"]),
         Term::Array(
             Array::new(
                 vs.iter()
@@ -60,7 +60,7 @@ fn enum_to_predicate(vs: &[Value]) -> RichTerm {
 
 fn const_to_predicate(v: &Value) -> RichTerm {
     Term::App(
-        make::static_access_("predicates", ["const"]),
+        static_access_("predicates", ["const"]),
         serde_json::from_value(v.clone()).unwrap(),
     )
     .into()
@@ -69,10 +69,10 @@ fn const_to_predicate(v: &Value) -> RichTerm {
 fn mk_all_of(schemas: impl IntoIterator<Item = RichTerm>) -> RichTerm {
     let schemas: Vec<_> = schemas.into_iter().collect();
     match schemas.as_slice() {
-        [] => make::static_access_("predicates", ["always"]),
+        [] => static_access_("predicates", ["always"]),
         [t] => t.clone(),
         _ => mk_app!(
-            make::static_access_("predicates", ["allOf"]),
+            static_access_("predicates", ["allOf"]),
             Term::Array(Array::from_iter(schemas), Default::default())
         ),
     }
@@ -81,10 +81,10 @@ fn mk_all_of(schemas: impl IntoIterator<Item = RichTerm>) -> RichTerm {
 fn mk_any_of(schemas: impl IntoIterator<Item = RichTerm>) -> RichTerm {
     let schemas: Vec<_> = schemas.into_iter().collect();
     match schemas.as_slice() {
-        [] => make::static_access_("predicates", ["always"]),
+        [] => static_access_("predicates", ["always"]),
         [t] => t.clone(),
         _ => mk_app!(
-            make::static_access_("predicates", ["anyOf"]),
+            static_access_("predicates", ["anyOf"]),
             Term::Array(Array::from_iter(schemas), Default::default())
         ),
     }
@@ -118,7 +118,7 @@ fn subschema_predicates(
         .as_deref()
         .map(|schemas| {
             mk_app!(
-                make::static_access_("predicates", ["oneOf"]),
+                static_access_("predicates", ["oneOf"]),
                 Term::Array(
                     Array::new(
                         schemas
@@ -136,7 +136,7 @@ fn subschema_predicates(
         .as_deref()
         .map(|s| {
             mk_app!(
-                make::static_access_("predicates", ["not"]),
+                static_access_("predicates", ["not"]),
                 schema_to_predicate(env, s)
             )
         })
@@ -146,7 +146,7 @@ fn subschema_predicates(
         .as_deref()
         .map(move |if_schema| {
             mk_app!(
-                make::static_access_("predicates", ["ifThenElse"]),
+                static_access_("predicates", ["ifThenElse"]),
                 schema_to_predicate(env, if_schema),
                 or_always(env, then_schema.as_deref()),
                 or_always(env, else_schema.as_deref())
@@ -169,7 +169,7 @@ fn number_predicates(nv: &NumberValidation) -> impl Iterator<Item = RichTerm> {
     fn predicate(s: &str) -> impl '_ + FnOnce(f64) -> RichTerm {
         move |n| {
             mk_app!(
-                make::static_access_("predicates", ["numbers", s]),
+                static_access_("predicates", ["numbers", s]),
                 Term::Num(Number::try_from_float_simplest(n).unwrap())
             )
         }
@@ -202,7 +202,7 @@ fn string_predicates(sv: &StringValidation) -> impl Iterator<Item = RichTerm> {
     let max_length = max_length
         .map(|n| {
             mk_app!(
-                make::static_access_("predicates", ["strings", "maxLength"]),
+                static_access_("predicates", ["strings", "maxLength"]),
                 Term::Num(n.into())
             )
         })
@@ -211,7 +211,7 @@ fn string_predicates(sv: &StringValidation) -> impl Iterator<Item = RichTerm> {
     let min_length = min_length
         .map(|n| {
             mk_app!(
-                make::static_access_("predicates", ["strings", "minLength"]),
+                static_access_("predicates", ["strings", "minLength"]),
                 Term::Num(n.into())
             )
         })
@@ -221,7 +221,7 @@ fn string_predicates(sv: &StringValidation) -> impl Iterator<Item = RichTerm> {
         .as_deref()
         .map(|s| {
             mk_app!(
-                make::static_access_("predicates", ["strings", "pattern"]),
+                static_access_("predicates", ["strings", "pattern"]),
                 make::string(s)
             )
         })
@@ -243,13 +243,13 @@ fn array_predicates(env: &References, av: &ArrayValidation) -> impl Iterator<Ite
     let items = match items {
         None => vec![],
         Some(SingleOrVec::Single(s)) => vec![mk_app!(
-            make::static_access_("predicates", ["arrays", "arrayOf"]),
+            static_access_("predicates", ["arrays", "arrayOf"]),
             schema_to_predicate(env, s)
         )],
         Some(SingleOrVec::Vec(schemas)) => {
             let len = schemas.len();
             [mk_app!(
-                make::static_access_("predicates", ["arrays", "items"]),
+                static_access_("predicates", ["arrays", "items"]),
                 Term::Array(
                     Array::new(
                         schemas
@@ -263,7 +263,7 @@ fn array_predicates(env: &References, av: &ArrayValidation) -> impl Iterator<Ite
             .into_iter()
             .chain(additional_items.as_deref().map(|s| {
                 mk_app!(
-                    make::static_access_("predicates", ["arrays", "additionalItems"]),
+                    static_access_("predicates", ["arrays", "additionalItems"]),
                     schema_to_predicate(env, s),
                     Term::Num(len.into())
                 )
@@ -276,7 +276,7 @@ fn array_predicates(env: &References, av: &ArrayValidation) -> impl Iterator<Ite
     let max_items = max_items
         .map(|n| {
             mk_app!(
-                make::static_access_("predicates", ["arrays", "maxItems"]),
+                static_access_("predicates", ["arrays", "maxItems"]),
                 Term::Num(n.into())
             )
         })
@@ -285,7 +285,7 @@ fn array_predicates(env: &References, av: &ArrayValidation) -> impl Iterator<Ite
     let min_items = min_items
         .map(|n| {
             mk_app!(
-                make::static_access_("predicates", ["arrays", "minItems"]),
+                static_access_("predicates", ["arrays", "minItems"]),
                 Term::Num(n.into())
             )
         })
@@ -293,10 +293,7 @@ fn array_predicates(env: &References, av: &ArrayValidation) -> impl Iterator<Ite
 
     let unique_items = unique_items
         .and_then(|unique| {
-            unique.then_some(make::static_access_(
-                "predicates",
-                ["arrays", "uniqueItems"],
-            ))
+            unique.then_some(static_access_("predicates", ["arrays", "uniqueItems"]))
         })
         .into_iter();
 
@@ -304,7 +301,7 @@ fn array_predicates(env: &References, av: &ArrayValidation) -> impl Iterator<Ite
         .as_deref()
         .map(|s| {
             mk_app!(
-                make::static_access_("predicates", ["arrays", "contains"]),
+                static_access_("predicates", ["arrays", "contains"]),
                 schema_to_predicate(env, s)
             )
         })
@@ -331,7 +328,7 @@ fn object_predicates(env: &References, ov: &ObjectValidation) -> impl Iterator<I
     let max_properties = max_properties
         .map(|n| {
             mk_app!(
-                make::static_access_("predicates", ["records", "maxProperties"]),
+                static_access_("predicates", ["records", "maxProperties"]),
                 Term::Num(n.into())
             )
         })
@@ -340,7 +337,7 @@ fn object_predicates(env: &References, ov: &ObjectValidation) -> impl Iterator<I
     let min_properties = min_properties
         .map(|n| {
             mk_app!(
-                make::static_access_("predicates", ["records", "minProperties"]),
+                static_access_("predicates", ["records", "minProperties"]),
                 Term::Num(n.into())
             )
         })
@@ -350,7 +347,7 @@ fn object_predicates(env: &References, ov: &ObjectValidation) -> impl Iterator<I
         .as_deref()
         .map(|s| {
             mk_app!(
-                make::static_access_("predicates", ["records", "propertyNames"]),
+                static_access_("predicates", ["records", "propertyNames"]),
                 schema_to_predicate(env, s)
             )
         })
@@ -361,7 +358,7 @@ fn object_predicates(env: &References, ov: &ObjectValidation) -> impl Iterator<I
             None
         } else {
             Some(mk_app!(
-                make::static_access_("predicates", ["records", "required"]),
+                static_access_("predicates", ["records", "required"]),
                 Term::Array(
                     Array::new(required.iter().map(make::string).collect()),
                     Default::default()
@@ -372,7 +369,7 @@ fn object_predicates(env: &References, ov: &ObjectValidation) -> impl Iterator<I
     .into_iter();
 
     let record = [mk_app!(
-        make::static_access_("predicates", ["records", "record"]),
+        static_access_("predicates", ["records", "record"]),
         Term::Record(RecordData::with_field_values(
             properties
                 .iter()
@@ -409,7 +406,7 @@ fn dependencies(
         .and_then(|v| v.as_object())
         .map(|deps| {
             mk_app!(
-                make::static_access_("predicates", ["records", "dependencies"]),
+                static_access_("predicates", ["records", "dependencies"]),
                 Term::Record(RecordData::with_field_values(
                     deps.into_iter()
                         .map(|(key, value)| (
@@ -474,8 +471,8 @@ pub fn schema_object_to_predicate(env: &References, o: &SchemaObject) -> RichTer
 
 pub fn schema_to_predicate(env: &References, schema: &Schema) -> RichTerm {
     match schema {
-        Schema::Bool(true) => make::static_access_("predicates", ["always"]),
-        Schema::Bool(false) => make::static_access_("predicates", ["never"]),
+        Schema::Bool(true) => static_access_("predicates", ["always"]),
+        Schema::Bool(false) => static_access_("predicates", ["never"]),
         Schema::Object(o) => schema_object_to_predicate(env, o),
     }
 }

@@ -15,13 +15,14 @@ use std::collections::{BTreeMap, HashMap};
 
 use nickel_lang_core::{
     identifier::Ident,
-    term::{make, record::RecordData, LetAttrs, RichTerm, Term},
+    term::{record::RecordData, LetAttrs, RichTerm, Term},
 };
 use schemars::schema::Schema;
 
 use crate::{
     contracts::{contract_from_predicate, schema_to_contract},
     predicates::schema_to_predicate,
+    utils::static_access_,
 };
 
 /// The predicate and contract generated for a schema.
@@ -66,8 +67,8 @@ impl References {
                     (
                         String::from(id),
                         Access {
-                            contract: make::static_access_("definitions", ["contract", id]),
-                            predicate: make::static_access_("definitions", ["predicate", id]),
+                            contract: static_access_("definitions", ["contract", id]),
+                            predicate: static_access_("definitions", ["predicate", id]),
                         },
                     )
                 })
