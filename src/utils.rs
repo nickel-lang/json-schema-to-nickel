@@ -3,7 +3,7 @@ use nickel_lang_core::{
     term::{make, RichTerm},
 };
 
-pub fn static_access_<I, S>(record: S, fields: I) -> RichTerm
+pub fn static_access<I, S>(record: S, fields: I) -> RichTerm
 where
     I: IntoIterator<Item = S>,
     I::IntoIter: DoubleEndedIterator,

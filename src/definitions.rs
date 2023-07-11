@@ -22,7 +22,7 @@ use schemars::schema::Schema;
 use crate::{
     contracts::{contract_from_predicate, schema_to_contract},
     predicates::schema_to_predicate,
-    utils::static_access_,
+    utils::static_access,
 };
 
 /// The predicate and contract generated for a schema.
@@ -67,8 +67,8 @@ impl References {
                     (
                         String::from(id),
                         Access {
-                            contract: static_access_("definitions", ["contract", id]),
-                            predicate: static_access_("definitions", ["predicate", id]),
+                            contract: static_access("definitions", ["contract", id]),
+                            predicate: static_access("definitions", ["predicate", id]),
                         },
                     )
                 })
