@@ -15,13 +15,14 @@ use std::collections::{BTreeMap, HashMap};
 
 use nickel_lang_core::{
     identifier::Ident,
-    term::{make, record::RecordData, LetAttrs, RichTerm, Term, UnaryOp},
+    term::{record::RecordData, LetAttrs, RichTerm, Term},
 };
 use schemars::schema::Schema;
 
 use crate::{
     contracts::{contract_from_predicate, schema_to_contract},
     predicates::schema_to_predicate,
+    utils::static_access,
 };
 
 /// The predicate and contract generated for a schema.
@@ -62,24 +63,12 @@ impl References {
             fields
                 .into_iter()
                 .map(|n| {
-                    let id = Ident::from(n.as_ref());
+                    let id = n.as_ref();
                     (
-                        String::from(n.as_ref()),
+                        String::from(id),
                         Access {
-                            contract: make::op1(
-                                UnaryOp::StaticAccess(id),
-                                make::op1(
-                                    UnaryOp::StaticAccess("contract".into()),
-                                    make::var("definitions"),
-                                ),
-                            ),
-                            predicate: make::op1(
-                                UnaryOp::StaticAccess(id),
-                                make::op1(
-                                    UnaryOp::StaticAccess("predicate".into()),
-                                    make::var("definitions"),
-                                ),
-                            ),
+                            contract: static_access("definitions", ["contract", id]),
+                            predicate: static_access("definitions", ["predicate", id]),
                         },
                     )
                 })

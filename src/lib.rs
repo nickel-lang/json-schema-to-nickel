@@ -22,6 +22,7 @@
 pub mod contracts;
 pub mod definitions;
 pub mod predicates;
+pub(crate) mod utils;
 
 use contracts::{contract_from_predicate, schema_object_to_contract};
 use definitions::Environment;

@@ -73,7 +73,7 @@
                   else
                     let result = value x."%{field}" in
                     if !result.success then
-                      { success = false, error = m%"field "%{field}" didn't validate: %{result.error}"%, checked : { _ : Bool } = {} }
+                      { success = false, error = m%%"field "%{field}" didn't validate: %{result.error}"%%, checked : { _ : Bool } = {} }
                     else
                       { success = acc.success, error = acc.error, checked = std.record.insert field true acc.checked }
               )
@@ -108,7 +108,7 @@
                         fun { field, value } acc =>
                           let result = pred value in
                           if !result.success then
-                            { success = false, error = m%"field "%{field}" didn't validate: %{result.error}"%, checked : { _ : Bool } = {} }
+                            { success = false, error = m%%"field "%{field}" didn't validate: %{result.error}"%%, checked : { _ : Bool } = {} }
                           else
                             { success = acc.success, error = acc.error, checked = std.record.insert field true acc.checked }
                       )
@@ -158,7 +158,7 @@
                   fun { field, value } acc =>
                     let result = additionalProperties value in
                     if !result.success then
-                      { success = false, error = m%"field "%{field}" didn't validate: %{result.error}"% }
+                      { success = false, error = m%%"field "%{field}" didn't validate: %{result.error}"%% }
                     else
                       acc
                 )
