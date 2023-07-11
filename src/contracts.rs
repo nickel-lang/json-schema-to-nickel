@@ -111,7 +111,7 @@ pub fn schema_object_to_nickel_type(schema: &SchemaObject) -> Option<LabeledType
 pub fn schema_to_nickel_type(schema: &Schema) -> Option<LabeledType> {
     match schema {
         Schema::Bool(_) => None,
-        Schema::Object(obj) => schema_object_to_nickel_type(env),
+        Schema::Object(obj) => schema_object_to_nickel_type(obj),
     }
 }
 
