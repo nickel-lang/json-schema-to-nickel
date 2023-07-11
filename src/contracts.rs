@@ -39,7 +39,7 @@ use nickel_lang_core::{
 };
 use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec};
 
-use crate::{definitions, predicates::schema_to_predicate, utils::static_access};
+use crate::{definitions, predicates::AsPredicate, utils::static_access};
 
 // XXX: document
 pub trait AsContract {
@@ -269,7 +269,7 @@ fn generate_record_contract(
         } else if let Some(term) = schema.try_as_contract() {
             vec![term.as_labeled_type()]
         } else {
-            vec![contract_from_predicate(schema_to_predicate(schema)).as_labeled_type()]
+            vec![contract_from_predicate(schema.as_predicate()).as_labeled_type()]
         };
         (
             name.into(),

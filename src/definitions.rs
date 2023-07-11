@@ -20,7 +20,7 @@ use schemars::schema::Schema;
 
 use crate::{
     contracts::{contract_from_predicate, TryAsContract},
-    predicates::schema_to_predicate,
+    predicates::AsPredicate,
     utils::static_access,
 };
 
@@ -115,7 +115,7 @@ impl From<&BTreeMap<String, Schema>> for Environment {
         let terms = defs
             .iter()
             .map(|(name, schema)| {
-                let predicate = schema_to_predicate(schema);
+                let predicate = schema.as_predicate();
                 (
                     name.clone(),
                     ConvertedSchema {
