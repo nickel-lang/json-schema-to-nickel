@@ -446,15 +446,10 @@ pub fn schema_object_to_predicate(o: &SchemaObject) -> RichTerm {
                     .as_deref()
                     .map(|r| definitions::reference(r).predicate),
             )
-<<<<<<< HEAD
-            // XXX schema.rs parses this incorrectly, so we have to correct for it
-            .chain(dependencies(extensions)),
-=======
             // schema.rs parses dependencies incorrectly. It should really be
             // part of object validation (object_predicates()) but it gets put
             // in extensions instead.
-            .chain(dependencies(env, extensions)),
->>>>>>> 2535d81 (change documentation)
+            .chain(dependencies(extensions)),
     )
 }
 

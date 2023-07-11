@@ -42,7 +42,7 @@ pub struct Access {
 /// An environment of top level schema definitions and their conversions into
 /// Nickel predicates and contracts.
 #[derive(Clone, Default)]
-pub struct Environment(HashMap<String, Terms>);
+pub struct Environment(HashMap<String, ConvertedSchema>);
 
 pub fn access(name: impl AsRef<str>) -> Access {
     Access {
@@ -118,20 +118,9 @@ impl From<&BTreeMap<String, Schema>> for Environment {
                 let predicate = schema_to_predicate(schema);
                 (
                     name.clone(),
-<<<<<<< HEAD
-                    Terms {
+                    ConvertedSchema {
                         contract: schema_to_contract(schema)
                             .unwrap_or_else(|| contract_from_predicate(access(name).predicate)),
-=======
-                    ConvertedSchema {
-                        contract: schema_to_contract(&accesses, schema).unwrap_or_else(|| {
-                            contract_from_predicate(
-                                accesses
-                                    .get_predicate(name)
-                                    .expect("accesses has the correct keys by construction"),
-                            )
-                        }),
->>>>>>> 2535d81 (change documentation)
                         predicate,
                     },
                 )
