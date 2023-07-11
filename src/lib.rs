@@ -35,10 +35,10 @@ use schemars::schema::RootSchema;
 /// Otherwise, we fall back to generating a predicate.
 pub fn root_schema(root: &RootSchema) -> RichTerm {
     let env = Environment::from(&root.definitions);
-    if let Some(contract) = schema_object_to_contract(env.references(), &root.schema) {
+    if let Some(contract) = schema_object_to_contract(&root.schema) {
         wrap_contract(env, contract)
     } else {
-        let predicate = schema_object_to_predicate(env.references(), &root.schema);
+        let predicate = schema_object_to_predicate(&root.schema);
         wrap_predicate(env, predicate)
     }
 }
