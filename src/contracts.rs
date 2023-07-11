@@ -41,6 +41,23 @@ use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, Sin
 
 use crate::{definitions, predicates::schema_to_predicate, utils::static_access};
 
+// XXX: document
+pub trait AsContract {
+    fn as_contract(self) -> RichTerm;
+}
+
+pub trait TryAsContract {
+    fn try_as_contract(self) -> Option<RichTerm>;
+}
+
+pub trait AsLabeledType {
+    fn as_labeled_type(self) -> LabeledType;
+}
+
+pub trait TryAsLabeledType {
+    fn try_as_labeled_type(self) -> Option<LabeledType>;
+}
+
 /// Convert an [`InstanceType`] into a Nickel [`RichTerm`]. We're in a bit of a
 /// bind here. When types appear in term position, they are parsed immediately
 /// into another form (built-in contracts like `$bool`). These contracts would
@@ -49,171 +66,191 @@ use crate::{definitions, predicates::schema_to_predicate, utils::static_access};
 /// In other words, the way types in term position are represented internally
 /// cannot be pretty printed and parsed again. So here we use `Term::Var`. If
 /// we passed this directly to Nickel as a `RichTerm`, it would be an error,
-/// but  the pretty printer not understanding that builtin type names are not
+/// but the pretty printer not understanding that builtin type names are not
 /// valid identifiers.
-fn type_to_contract(x: InstanceType) -> RichTerm {
-    match x {
-        InstanceType::Null => contract_from_predicate(mk_app!(
-            static_access("predicates", ["isType"]),
-            Term::Enum("Null".into())
-        )),
-        InstanceType::Boolean => make::var("Bool"),
-        InstanceType::Object => Term::Record(RecordData {
-            attrs: RecordAttrs { open: true },
-            ..Default::default()
-        })
-        .into(),
-        InstanceType::Array => mk_app!(make::var("Array"), make::var("Dyn")),
-        InstanceType::Number => make::var("Number"),
-        InstanceType::String => make::var("String"),
-        InstanceType::Integer => static_access("std", ["number", "Integer"]),
-    }
-}
-
-fn type_to_nickel_type(x: InstanceType) -> LabeledType {
-    let types = match x {
-        InstanceType::Boolean => TypeF::Bool.into(),
-        InstanceType::Array => TypeF::Array(Box::new(Types::from(TypeF::Dyn))).into(),
-        InstanceType::Number => TypeF::Number.into(),
-        InstanceType::String => TypeF::String.into(),
-        InstanceType::Null | InstanceType::Object | InstanceType::Integer => {
-            TypeF::Flat(type_to_contract(x)).into()
-        }
-    };
-    LabeledType {
-        types,
-        label: Label::dummy(),
-    }
-}
-
-/// Convert a JSON schema object into a Nickel [`LabeledType`], when possible.
-pub fn schema_object_to_nickel_type(schema: &SchemaObject) -> Option<LabeledType> {
-    match schema {
-        SchemaObject {
-            metadata: _,
-            instance_type: Some(SingleOrVec::Single(instance_type)),
-            format: _,
-            enum_values: None,
-            const_value: None,
-            subschemas: None,
-            number: None,
-            string: None,
-            array: None,
-            object: None,
-            reference: None, /* TODO(vkleen): We should be able to relax this once we properly
-                              * track references */
-            extensions,
-        } if extensions.is_empty() => Some(type_to_nickel_type(**instance_type)),
-        _ => None,
-    }
-}
-
-pub fn schema_to_nickel_type(schema: &Schema) -> Option<LabeledType> {
-    match schema {
-        Schema::Bool(_) => None,
-        Schema::Object(obj) => schema_object_to_nickel_type(obj),
-    }
-}
-
-pub fn schema_object_ov_to_contract(ov: &ObjectValidation) -> Option<RichTerm> {
-    fn is_open_record(additional: Option<&Schema>) -> bool {
-        match additional {
-            Some(Schema::Bool(open)) => *open,
-            None => true,
-            _ => unreachable!("additional_properties must be checked beforehand"),
-        }
-    }
-
-    // box / deref patterns aren't stabilized, so we have to separate out
-    // `additional_properties` as a separate pattern
-    // SEE: https://github.com/rust-lang/rust/issues/29641
-    // SEE: https://github.com/rust-lang/rust/issues/87121
-    match (ov, ov.additional_properties.as_deref()) {
-        (
-            ObjectValidation {
-                max_properties: None,
-                min_properties: None,
-                required,
-                properties,
-                pattern_properties,
-                additional_properties,
-                property_names: None,
-            },
-            None | Some(Schema::Bool(_)),
-        ) if pattern_properties.is_empty() => Some(generate_record_contract(
-            required,
-            properties,
-            is_open_record(additional_properties.as_deref()),
-        )),
-        _ => None,
-    }
-}
-
-/// Convert a JSON schema object into a record contract, when possible.
-pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
-    match schema {
-        // a reference to a definition
-        SchemaObject {
-            metadata: _,
-            instance_type: None,
-            format: None,
-            enum_values: None,
-            const_value: None,
-            subschemas: None,
-            number: None,
-            string: None,
-            array: None,
-            object: None,
-            reference: Some(reference),
-            extensions,
-        } if extensions.is_empty() => Some(definitions::reference(reference).contract),
-        // a freeform record
-        SchemaObject {
-            metadata: _,
-            instance_type: Some(SingleOrVec::Single(instance_type)),
-            format: None,
-            enum_values: None,
-            const_value: None,
-            subschemas: None,
-            number: None,
-            string: None,
-            array: None,
-            object: None,
-            reference: None,
-            extensions,
-        } if **instance_type == InstanceType::Object && extensions.is_empty() => Some(
-            Term::Record(RecordData {
+impl AsContract for InstanceType {
+    fn as_contract(self) -> RichTerm {
+        match self {
+            InstanceType::Null => contract_from_predicate(mk_app!(
+                static_access("predicates", ["isType"]),
+                Term::Enum("Null".into())
+            )),
+            InstanceType::Boolean => make::var("Bool"),
+            InstanceType::Object => Term::Record(RecordData {
                 attrs: RecordAttrs { open: true },
                 ..Default::default()
             })
             .into(),
-        ),
-        // a record with sub-field types specified
-        SchemaObject {
-            metadata: _,
-            instance_type: Some(SingleOrVec::Single(instance_type)),
-            format: None,
-            enum_values: None,
-            const_value: None,
-            subschemas: None,
-            number: None,
-            string: None,
-            array: None,
-            object: Some(ov),
-            reference: None,
-            extensions,
-        } if **instance_type == InstanceType::Object && extensions.is_empty() => {
-            schema_object_ov_to_contract(ov.as_ref())
+            InstanceType::Array => mk_app!(make::var("Array"), make::var("Dyn")),
+            InstanceType::Number => make::var("Number"),
+            InstanceType::String => make::var("String"),
+            InstanceType::Integer => static_access("std", ["number", "Integer"]),
         }
-        _ => None,
     }
 }
 
-/// Convert a JSON schema into a Nickel record contract, when possible.
-pub fn schema_to_contract(schema: &Schema) -> Option<RichTerm> {
-    match schema {
-        Schema::Bool(_) => None,
-        Schema::Object(obj) => schema_object_to_contract(obj),
+impl AsLabeledType for InstanceType {
+    fn as_labeled_type(self) -> LabeledType {
+        let types = match self {
+            InstanceType::Boolean => TypeF::Bool.into(),
+            InstanceType::Array => TypeF::Array(Box::new(Types::from(TypeF::Dyn))).into(),
+            InstanceType::Number => TypeF::Number.into(),
+            InstanceType::String => TypeF::String.into(),
+            InstanceType::Null | InstanceType::Object | InstanceType::Integer => {
+                TypeF::Flat(self.as_contract()).into()
+            }
+        };
+        LabeledType {
+            types,
+            label: Label::dummy(),
+        }
+    }
+}
+
+impl TryAsLabeledType for &SchemaObject {
+    fn try_as_labeled_type(self) -> Option<LabeledType> {
+        match self {
+            SchemaObject {
+                metadata: _,
+                instance_type: Some(SingleOrVec::Single(instance_type)),
+                format: _,
+                enum_values: None,
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: None,
+                object: None,
+                reference: None, /* TODO(vkleen): We should be able to relax this once we properly
+                                  * track references */
+                extensions,
+            } if extensions.is_empty() => Some(instance_type.as_labeled_type()),
+            _ => None,
+        }
+    }
+}
+
+impl TryAsLabeledType for &Schema {
+    fn try_as_labeled_type(self) -> Option<LabeledType> {
+        match self {
+            Schema::Bool(_) => None,
+            Schema::Object(obj) => obj.try_as_labeled_type(),
+        }
+    }
+}
+
+impl TryAsContract for &ObjectValidation {
+    fn try_as_contract(self) -> Option<RichTerm> {
+        fn is_open_record(additional: Option<&Schema>) -> bool {
+            match additional {
+                Some(Schema::Bool(open)) => *open,
+                None => true,
+                _ => unreachable!("additional_properties must be checked beforehand"),
+            }
+        }
+
+        // box / deref patterns aren't stabilized, so we have to separate out
+        // `additional_properties` as a separate pattern
+        // SEE: https://github.com/rust-lang/rust/issues/29641
+        // SEE: https://github.com/rust-lang/rust/issues/87121
+        match (self, self.additional_properties.as_deref()) {
+            (
+                ObjectValidation {
+                    max_properties: None,
+                    min_properties: None,
+                    required,
+                    properties,
+                    pattern_properties,
+                    additional_properties,
+                    property_names: None,
+                },
+                None | Some(Schema::Bool(_)),
+            ) if pattern_properties.is_empty() => Some(generate_record_contract(
+                required,
+                properties,
+                is_open_record(additional_properties.as_deref()),
+            )),
+            _ => None,
+        }
+    }
+}
+
+impl TryAsContract for &SchemaObject {
+    fn try_as_contract(self) -> Option<RichTerm> {
+        match self {
+            // a reference to a definition
+            SchemaObject {
+                metadata: _,
+                instance_type: None,
+                format: None,
+                enum_values: None,
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: None,
+                object: None,
+                reference: Some(reference),
+                extensions,
+            } if extensions.is_empty() => Some(definitions::reference(reference).contract),
+            // a freeform record
+            SchemaObject {
+                metadata: _,
+                instance_type: Some(SingleOrVec::Single(instance_type)),
+                format: None,
+                enum_values: None,
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: None,
+                object: None,
+                reference: None,
+                extensions,
+            } if **instance_type == InstanceType::Object && extensions.is_empty() => Some(
+                Term::Record(RecordData {
+                    attrs: RecordAttrs { open: true },
+                    ..Default::default()
+                })
+                .into(),
+            ),
+            // a record with sub-field types specified
+            SchemaObject {
+                metadata: _,
+                instance_type: Some(SingleOrVec::Single(instance_type)),
+                format: None,
+                enum_values: None,
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: None,
+                object: Some(ov),
+                reference: None,
+                extensions,
+            } if **instance_type == InstanceType::Object && extensions.is_empty() => {
+                ov.as_ref().try_as_contract()
+            }
+            _ => None,
+        }
+    }
+}
+
+impl TryAsContract for &Schema {
+    fn try_as_contract(self) -> Option<RichTerm> {
+        match self {
+            Schema::Bool(_) => None,
+            Schema::Object(obj) => obj.try_as_contract(),
+        }
+    }
+}
+
+impl AsLabeledType for RichTerm {
+    fn as_labeled_type(self) -> LabeledType {
+        LabeledType {
+            types: TypeF::Flat(self).into(),
+            label: Label::dummy(),
+        }
     }
 }
 
@@ -227,18 +264,12 @@ fn generate_record_contract(
             // record fields where anything is allowed should look like
             // { a, b } not { a | predicates.always, b | predicates.always }
             vec![]
-        } else if let Some(t) = schema_to_nickel_type(schema) {
+        } else if let Some(t) = schema.try_as_labeled_type() {
             vec![t]
-        } else if let Some(term) = schema_to_contract(schema) {
-            vec![LabeledType {
-                types: TypeF::Flat(term).into(),
-                label: Label::dummy(),
-            }]
+        } else if let Some(term) = schema.try_as_contract() {
+            vec![term.as_labeled_type()]
         } else {
-            vec![LabeledType {
-                types: TypeF::Flat(contract_from_predicate(schema_to_predicate(schema))).into(),
-                label: Label::dummy(),
-            }]
+            vec![contract_from_predicate(schema_to_predicate(schema)).as_labeled_type()]
         };
         (
             name.into(),
