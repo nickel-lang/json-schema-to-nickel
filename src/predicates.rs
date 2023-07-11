@@ -451,8 +451,8 @@ pub fn schema_object_to_predicate(o: &SchemaObject) -> RichTerm {
             .chain(dependencies(extensions)),
 =======
             // schema.rs parses dependencies incorrectly. It should really be
-            // XXX viktor help i forget where this field is supposed to go XXX
-            // but it gets parsed as an extension instead.
+            // part of object validation (object_predicates()) but it gets put
+            // in extensions instead.
             .chain(dependencies(env, extensions)),
 >>>>>>> 2535d81 (change documentation)
     )
