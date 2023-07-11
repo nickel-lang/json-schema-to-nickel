@@ -43,8 +43,7 @@ fn translation_typecheck_test(
 
     let instance: RichTerm = serde_json::from_value(test_case.instance).unwrap();
 
-    // XXX: this assumes `./lib/predicates.nix` is accessible from the working
-    // directory
+    // FIXME: this relies on `./lib/predicates.nix` being accessible from the working directory
     let program = format!("{} | ({})", instance, contract);
     eprintln!("{}", program);
 

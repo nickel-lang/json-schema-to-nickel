@@ -41,17 +41,16 @@ use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, Sin
 
 use crate::{definitions, predicates::schema_to_predicate, utils::static_access};
 
-/// Convert an [`InstanceType`] into a Nickel [`RichTerm`]. Currently,
-/// `RichTerm` doesn't include a variant for embedding Nickel types into terms.
-/// Instead, in Nickel itself, the parser turns types that appear in term
-/// position into their contracts immediately. We could do the same thing here,
-/// but the resulting `RichTerm` would not be pretty printed in a useful way.
-/// Instead, the various internal contracts used in the Nickel interpreter would
-/// appear inlined into the term. To address this problem, we use `Term::Var`
-/// and rely on the pretty printer not understanding that builtin type names are
-/// not valid identifiers.
-// XXX literally wouldn't be able to parse it
-// XXX: only being used in type_to_nickel_type
+/// Convert an [`InstanceType`] into a Nickel [`RichTerm`]. We're in a bit of a
+/// bind here. When types appear in term position, they are parsed immediately
+/// into another form (built-in contracts like `$bool`). These contracts would
+/// get pretty-printed as-is (`$bool`), but `$`-identifiers are **only** valid
+/// when generated internally in Nickel; the parser does not understand them.
+/// In other words, the way types in term position are represented internally
+/// cannot be pretty printed and parsed again. So here we use `Term::Var`. If
+/// we passed this directly to Nickel as a `RichTerm`, it would be an error,
+/// but  the pretty printer not understanding that builtin type names are not
+/// valid identifiers.
 fn type_to_contract(x: InstanceType) -> RichTerm {
     match x {
         InstanceType::Null => contract_from_predicate(mk_app!(
@@ -71,7 +70,6 @@ fn type_to_contract(x: InstanceType) -> RichTerm {
     }
 }
 
-// XXX example of use
 fn type_to_nickel_type(x: InstanceType) -> LabeledType {
     let types = match x {
         InstanceType::Boolean => TypeF::Bool.into(),

@@ -6,7 +6,6 @@
 //! possible to reference fields in a schema hosted at a remote URI. We don't
 //! want to support the general case but we need a way of dealing with
 //! references to top-level definitions in a schema.
-// XXX unclear exactly what is being mapped to what
 //! This module handles an [`Environment`] data structure that keeps track of
 //! top-level definitions in a JSON schema and their translations into Nickel
 //! predicates and contracts.
@@ -25,10 +24,9 @@ use crate::{
     utils::static_access,
 };
 
-/// The predicate and contract generated for a schema.
-// XXX more descriptive name?
+/// The nickel predicate and contract generated for a schema.
 #[derive(Clone)]
-pub struct Terms {
+pub struct ConvertedSchema {
     predicate: RichTerm,
     contract: RichTerm,
 }
@@ -108,10 +106,10 @@ impl Environment {
     }
 }
 
-// XXX this type is the defintions field of a json schema
-// XXX: recursive definitions?
-//      - is it handled by schema.rs?
-//      - do we handle it correctly?
+/// Convert the `definitions` field of a json schema mapping identifiers to
+/// Schemas to an [`Environment`] struct mapping identifiers to Nickel terms
+// FIXME: Definitions can have their own definitions. Does this handle that
+//        correctly? Does schema.rs even handle it correctly?
 impl From<&BTreeMap<String, Schema>> for Environment {
     fn from(defs: &BTreeMap<String, Schema>) -> Self {
         let terms = defs
@@ -120,9 +118,20 @@ impl From<&BTreeMap<String, Schema>> for Environment {
                 let predicate = schema_to_predicate(schema);
                 (
                     name.clone(),
+<<<<<<< HEAD
                     Terms {
                         contract: schema_to_contract(schema)
                             .unwrap_or_else(|| contract_from_predicate(access(name).predicate)),
+=======
+                    ConvertedSchema {
+                        contract: schema_to_contract(&accesses, schema).unwrap_or_else(|| {
+                            contract_from_predicate(
+                                accesses
+                                    .get_predicate(name)
+                                    .expect("accesses has the correct keys by construction"),
+                            )
+                        }),
+>>>>>>> 2535d81 (change documentation)
                         predicate,
                     },
                 )
