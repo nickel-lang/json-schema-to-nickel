@@ -58,7 +58,7 @@ impl AsPredicate for &SingleOrVec<InstanceType> {
     }
 }
 
-/// XXX enum
+/// Convert a json schema Enum to a predicate. Enums are represented as &[Value].
 impl AsPredicate for &[Value] {
     fn as_predicate(self) -> RichTerm {
         mk_app!(
@@ -75,6 +75,7 @@ impl AsPredicate for &[Value] {
     }
 }
 
+/// Convert a json schema Const to a predicate. Consts are represented as Values
 impl AsPredicate for &Value {
     fn as_predicate(self) -> RichTerm {
         Term::App(
