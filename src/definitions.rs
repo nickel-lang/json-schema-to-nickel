@@ -8,8 +8,8 @@
 //! references to top-level definitions in a schema.
 //!
 //! This module handles an [`Environment`] data structure that keeps track of
-//! top-level definitions in a JSON schema and their mapping to [`RichTerm`]s
-//! for accessing them.
+//! top-level definitions in a JSON schema and their translations into Nickel
+//! predicates and contracts.
 
 use std::collections::{BTreeMap, HashMap};
 
