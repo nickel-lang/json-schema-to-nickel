@@ -108,50 +108,14 @@ pub fn schema_object_to_nickel_type(schema: &SchemaObject) -> Option<LabeledType
     }
 }
 
-/// Convert a JSON schema object into a record contract, when possible.
-pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
-    // XXX explain weird pattern match
-    // XXX put what these look like in a json schema
-    let Some(ov) = (match schema {
-        SchemaObject {
-            metadata: _,
-            instance_type: Some(SingleOrVec::Single(instance_type)),
-            format: None,
-            enum_values: None,
-            const_value: None,
-            subschemas: None,
-            number: None,
-            string: None,
-            array: None,
-            object: ov,
-            reference: None,
-            extensions,
-        } if **instance_type == InstanceType::Object && extensions.is_empty() => ov,
-        SchemaObject {
-            metadata: _,
-            instance_type: None,
-            format: None,
-            enum_values: None,
-            const_value: None,
-            subschemas: None,
-            number: None,
-            string: None,
-            array: None,
-            object: None,
-            reference: Some(reference),
-            extensions,
-        } if extensions.is_empty() => return Some(definitions::reference(reference).contract),
-        _ => return None,
-    }) else {
-        return Some(
-            Term::Record(RecordData {
-                attrs: RecordAttrs { open: true },
-                ..Default::default()
-            })
-            .into(),
-        );
-    };
+pub fn schema_to_nickel_type(schema: &Schema) -> Option<LabeledType> {
+    match schema {
+        Schema::Bool(_) => None,
+        Schema::Object(obj) => schema_object_to_nickel_type(env),
+    }
+}
 
+pub fn schema_object_ov_to_contract(ov: &ObjectValidation) -> Option<RichTerm> {
     fn is_open_record(additional: Option<&Schema>) -> bool {
         match additional {
             Some(Schema::Bool(open)) => *open,
@@ -160,8 +124,11 @@ pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
         }
     }
 
-    // XXX explain weird pattern match
-    match (ov.as_ref(), ov.additional_properties.as_deref()) {
+    // box / deref patterns aren't stabilized, so we have to separate out
+    // `additional_properties` as a separate pattern
+    // SEE: https://github.com/rust-lang/rust/issues/29641
+    // SEE: https://github.com/rust-lang/rust/issues/87121
+    match (ov, ov.additional_properties.as_deref()) {
         (
             ObjectValidation {
                 max_properties: None,
@@ -182,6 +149,66 @@ pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
     }
 }
 
+/// Convert a JSON schema object into a record contract, when possible.
+pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
+    match schema {
+        // a reference to a definition
+        SchemaObject {
+            metadata: _,
+            instance_type: None,
+            format: None,
+            enum_values: None,
+            const_value: None,
+            subschemas: None,
+            number: None,
+            string: None,
+            array: None,
+            object: None,
+            reference: Some(reference),
+            extensions,
+        } if extensions.is_empty() => Some(definitions::reference(reference).contract),
+        // a freeform record
+        SchemaObject {
+            metadata: _,
+            instance_type: Some(SingleOrVec::Single(instance_type)),
+            format: None,
+            enum_values: None,
+            const_value: None,
+            subschemas: None,
+            number: None,
+            string: None,
+            array: None,
+            object: None,
+            reference: None,
+            extensions,
+        } if **instance_type == InstanceType::Object && extensions.is_empty() => Some(
+            Term::Record(RecordData {
+                attrs: RecordAttrs { open: true },
+                ..Default::default()
+            })
+            .into(),
+        ),
+        // a record with sub-field types specified
+        SchemaObject {
+            metadata: _,
+            instance_type: Some(SingleOrVec::Single(instance_type)),
+            format: None,
+            enum_values: None,
+            const_value: None,
+            subschemas: None,
+            number: None,
+            string: None,
+            array: None,
+            object: Some(ov),
+            reference: None,
+            extensions,
+        } if **instance_type == InstanceType::Object && extensions.is_empty() => {
+            schema_object_ov_to_contract(ov.as_ref())
+        }
+        _ => None,
+    }
+}
+
 /// Convert a JSON schema into a Nickel record contract, when possible.
 pub fn schema_to_contract(schema: &Schema) -> Option<RichTerm> {
     match schema {
@@ -196,33 +223,22 @@ fn generate_record_contract(
     open: bool,
 ) -> RichTerm {
     let fields = properties.iter().map(|(name, schema)| {
-        // XXX say why we don't just recurse immediately
-        let contracts = match schema {
-            Schema::Bool(false) => vec![LabeledType {
-                types: TypeF::Flat(contract_from_predicate(static_access(
-                    "predicates",
-                    ["never"],
-                )))
-                .into(),
+        let contracts = if let Schema::Bool(true) = schema {
+            // record fields where anything is allowed should look like
+            // { a, b } not { a | predicates.always, b | predicates.always }
+            vec![]
+        } else if let Some(t) = schema_to_nickel_type(schema) {
+            vec![t]
+        } else if let Some(term) = schema_to_contract(schema) {
+            vec![LabeledType {
+                types: TypeF::Flat(term).into(),
                 label: Label::dummy(),
-            }],
-            Schema::Bool(true) => vec![],
-            Schema::Object(obj) => {
-                if let Some(t) = schema_object_to_nickel_type(obj) {
-                    vec![t]
-                } else if let Some(term) = schema_object_to_contract(obj) {
-                    vec![LabeledType {
-                        types: TypeF::Flat(term).into(),
-                        label: Label::dummy(),
-                    }]
-                } else {
-                    vec![LabeledType {
-                        types: TypeF::Flat(contract_from_predicate(schema_to_predicate(schema)))
-                            .into(),
-                        label: Label::dummy(),
-                    }]
-                }
-            }
+            }]
+        } else {
+            vec![LabeledType {
+                types: TypeF::Flat(contract_from_predicate(schema_to_predicate(schema))).into(),
+                label: Label::dummy(),
+            }]
         };
         (
             name.into(),
