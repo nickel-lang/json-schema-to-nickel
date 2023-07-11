@@ -37,10 +37,7 @@ fn translation_typecheck_test(
     } else {
         wrap_predicate(
             Environment::empty(),
-            schema_to_predicate(
-                &Default::default(),
-                &dbg!(serde_json::from_value(test_case.schema).unwrap()),
-            ),
+            schema_to_predicate(&dbg!(serde_json::from_value(test_case.schema).unwrap())),
         )
     };
 

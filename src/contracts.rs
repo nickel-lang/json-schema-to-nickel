@@ -39,7 +39,7 @@ use nickel_lang_core::{
 };
 use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec};
 
-use crate::{definitions::References, predicates::schema_to_predicate, utils::static_access};
+use crate::{definitions, predicates::schema_to_predicate, utils::static_access};
 
 /// Convert an [`InstanceType`] into a Nickel [`RichTerm`]. Currently,
 /// `RichTerm` doesn't include a variant for embedding Nickel types into terms.
@@ -108,7 +108,7 @@ pub fn schema_object_to_nickel_type(schema: &SchemaObject) -> Option<LabeledType
 }
 
 /// Convert a JSON schema object into a record contract, when possible.
-pub fn schema_object_to_contract(env: &References, schema: &SchemaObject) -> Option<RichTerm> {
+pub fn schema_object_to_contract(schema: &SchemaObject) -> Option<RichTerm> {
     let Some(ov) = (match schema {
         SchemaObject {
             metadata: _,
@@ -137,7 +137,7 @@ pub fn schema_object_to_contract(env: &References, schema: &SchemaObject) -> Opt
             object: None,
             reference: Some(reference),
             extensions,
-        } if extensions.is_empty() => return Some(env.reference(reference).contract.clone()),
+        } if extensions.is_empty() => return Some(definitions::reference(reference).contract),
         _ => return None,
     }) else {
         return Some(
@@ -170,7 +170,6 @@ pub fn schema_object_to_contract(env: &References, schema: &SchemaObject) -> Opt
             },
             None | Some(Schema::Bool(_)),
         ) if pattern_properties.is_empty() => Some(generate_record_contract(
-            env,
             required,
             properties,
             is_open_record(additional_properties.as_deref()),
@@ -180,15 +179,14 @@ pub fn schema_object_to_contract(env: &References, schema: &SchemaObject) -> Opt
 }
 
 /// Convert a JSON schema into a Nickel record contract, when possible.
-pub fn schema_to_contract(env: &References, schema: &Schema) -> Option<RichTerm> {
+pub fn schema_to_contract(schema: &Schema) -> Option<RichTerm> {
     match schema {
         Schema::Bool(_) => None,
-        Schema::Object(obj) => schema_object_to_contract(env, obj),
+        Schema::Object(obj) => schema_object_to_contract(obj),
     }
 }
 
 fn generate_record_contract(
-    env: &References,
     required: &BTreeSet<String>,
     properties: &BTreeMap<String, Schema>,
     open: bool,
@@ -207,17 +205,15 @@ fn generate_record_contract(
             Schema::Object(obj) => {
                 if let Some(t) = schema_object_to_nickel_type(obj) {
                     vec![t]
-                } else if let Some(term) = schema_object_to_contract(env, obj) {
+                } else if let Some(term) = schema_object_to_contract(obj) {
                     vec![LabeledType {
                         types: TypeF::Flat(term).into(),
                         label: Label::dummy(),
                     }]
                 } else {
                     vec![LabeledType {
-                        types: TypeF::Flat(contract_from_predicate(schema_to_predicate(
-                            env, schema,
-                        )))
-                        .into(),
+                        types: TypeF::Flat(contract_from_predicate(schema_to_predicate(schema)))
+                            .into(),
                         label: Label::dummy(),
                     }]
                 }
