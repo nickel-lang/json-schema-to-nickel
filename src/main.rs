@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let types: DocBuilder<'_, _, ()> = root_schema(&schema).pretty(&pretty::BoxAllocator);
 
+    println!("# DO NOT EDIT\n# This file was automatically generated using json-schema-to-nickel");
     types.render(size, &mut stdout())?;
 
     Ok(())

@@ -1,3 +1,5 @@
+# DO NOT EDIT
+# This file was automatically generated using json-schema-to-nickel
 let predicates = import "./lib/predicates.ncl" in
 let rec definitions = {
   contract = {
