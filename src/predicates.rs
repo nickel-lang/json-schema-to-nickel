@@ -14,13 +14,13 @@ use serde_json::Value;
 use crate::{definitions, utils::static_access};
 
 pub trait AsPredicate {
-    fn as_predicate(self) -> RichTerm;
+    fn as_predicate(&self) -> RichTerm;
 }
 
 pub trait AsPredicates {
     // TODO: Turn Vec<_> into Iterator<Item = _> when RPTIT is implemented
     // SEE: https://rust-lang.github.io/impl-trait-initiative/RFCs/rpit-in-traits.html
-    fn as_predicates(self) -> Vec<RichTerm>;
+    fn as_predicates(&self) -> Vec<RichTerm>;
 }
 
 fn or_always(s: Option<&Schema>) -> RichTerm {
@@ -29,7 +29,7 @@ fn or_always(s: Option<&Schema>) -> RichTerm {
 }
 
 impl AsPredicate for InstanceType {
-    fn as_predicate(self) -> RichTerm {
+    fn as_predicate(&self) -> RichTerm {
         let type_tag = match self {
             InstanceType::Null => Term::Enum("Null".into()),
             InstanceType::Boolean => Term::Enum("Bool".into()),
@@ -43,8 +43,8 @@ impl AsPredicate for InstanceType {
     }
 }
 
-impl AsPredicate for &SingleOrVec<InstanceType> {
-    fn as_predicate(self) -> RichTerm {
+impl AsPredicate for SingleOrVec<InstanceType> {
+    fn as_predicate(&self) -> RichTerm {
         match self {
             SingleOrVec::Single(t) => t.as_predicate(),
             SingleOrVec::Vec(ts) => mk_app!(
@@ -58,9 +58,9 @@ impl AsPredicate for &SingleOrVec<InstanceType> {
     }
 }
 
-/// Convert a json schema Enum to a predicate. Enums are represented as &[Value].
-impl AsPredicate for &[Value] {
-    fn as_predicate(self) -> RichTerm {
+/// Convert a json schema Enum to a predicate. Enums are represented by `[Value]`s.
+impl AsPredicate for [Value] {
+    fn as_predicate(&self) -> RichTerm {
         mk_app!(
             static_access("predicates", ["enum"]),
             Term::Array(
@@ -75,9 +75,9 @@ impl AsPredicate for &[Value] {
     }
 }
 
-/// Convert a json schema Const to a predicate. Consts are represented as Values
-impl AsPredicate for &Value {
-    fn as_predicate(self) -> RichTerm {
+/// Convert a json schema Const to a predicate. Consts are represented by `Value`s
+impl AsPredicate for Value {
+    fn as_predicate(&self) -> RichTerm {
         Term::App(
             static_access("predicates", ["const"]),
             serde_json::from_value(self.clone()).unwrap(),
@@ -110,8 +110,8 @@ fn mk_any_of(schemas: impl IntoIterator<Item = RichTerm>) -> RichTerm {
     }
 }
 
-impl AsPredicates for &SubschemaValidation {
-    fn as_predicates(self) -> Vec<RichTerm> {
+impl AsPredicates for SubschemaValidation {
+    fn as_predicates(&self) -> Vec<RichTerm> {
         let SubschemaValidation {
             all_of,
             any_of,
@@ -171,8 +171,8 @@ impl AsPredicates for &SubschemaValidation {
     }
 }
 
-impl AsPredicates for &NumberValidation {
-    fn as_predicates(self) -> Vec<RichTerm> {
+impl AsPredicates for NumberValidation {
+    fn as_predicates(&self) -> Vec<RichTerm> {
         let NumberValidation {
             multiple_of,
             maximum,
@@ -209,8 +209,8 @@ impl AsPredicates for &NumberValidation {
     }
 }
 
-impl AsPredicates for &StringValidation {
-    fn as_predicates(self) -> Vec<RichTerm> {
+impl AsPredicates for StringValidation {
+    fn as_predicates(&self) -> Vec<RichTerm> {
         let StringValidation {
             max_length,
             min_length,
@@ -249,8 +249,8 @@ impl AsPredicates for &StringValidation {
     }
 }
 
-impl AsPredicates for &ArrayValidation {
-    fn as_predicates(self) -> Vec<RichTerm> {
+impl AsPredicates for ArrayValidation {
+    fn as_predicates(&self) -> Vec<RichTerm> {
         let ArrayValidation {
             items,
             additional_items,
@@ -331,8 +331,8 @@ impl AsPredicates for &ArrayValidation {
     }
 }
 
-impl AsPredicates for &ObjectValidation {
-    fn as_predicates(self) -> Vec<RichTerm> {
+impl AsPredicates for ObjectValidation {
+    fn as_predicates(&self) -> Vec<RichTerm> {
         let ObjectValidation {
             max_properties,
             min_properties,
@@ -451,8 +451,8 @@ fn dependencies(extensions: &BTreeMap<String, Value>) -> impl Iterator<Item = Ri
         .into_iter()
 }
 
-impl AsPredicate for &SchemaObject {
-    fn as_predicate(self) -> RichTerm {
+impl AsPredicate for SchemaObject {
+    fn as_predicate(&self) -> RichTerm {
         // NOTE: You may naively think that, for instance, numbers and strings are
         // mutually exclusive. Not to a json schema! Any number of these fields can
         // be set and the semantics is they get ANDed together, even if that can
@@ -495,8 +495,8 @@ impl AsPredicate for &SchemaObject {
     }
 }
 
-impl AsPredicate for &Schema {
-    fn as_predicate(self) -> RichTerm {
+impl AsPredicate for Schema {
+    fn as_predicate(&self) -> RichTerm {
         match self {
             Schema::Bool(true) => static_access("predicates", ["always"]),
             Schema::Bool(false) => static_access("predicates", ["never"]),

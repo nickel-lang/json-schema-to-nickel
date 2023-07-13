@@ -43,22 +43,22 @@ use crate::{definitions, predicates::AsPredicate, utils::static_access};
 
 /// Convert to a Nickel [`RichtTerm`] representing a contract.
 pub trait AsContract {
-    fn as_contract(self) -> RichTerm;
+    fn as_contract(&self) -> RichTerm;
 }
 
 /// Convert to a Nickel [`RichtTerm`] representing a contract, if possible.
 pub trait TryAsContract {
-    fn try_as_contract(self) -> Option<RichTerm>;
+    fn try_as_contract(&self) -> Option<RichTerm>;
 }
 
 /// Convert to a Nickel [`LabeledType`]
 pub trait AsLabeledType {
-    fn as_labeled_type(self) -> LabeledType;
+    fn as_labeled_type(&self) -> LabeledType;
 }
 
 /// Convert to a Nickel [`LabeledType`], if possible.
 pub trait TryAsLabeledType {
-    fn try_as_labeled_type(self) -> Option<LabeledType>;
+    fn try_as_labeled_type(&self) -> Option<LabeledType>;
 }
 
 /// Convert an [`InstanceType`] into a Nickel [`RichTerm`]. We're in a bit of a
@@ -72,7 +72,7 @@ pub trait TryAsLabeledType {
 /// but the pretty printer not understanding that builtin type names are not
 /// valid identifiers.
 impl AsContract for InstanceType {
-    fn as_contract(self) -> RichTerm {
+    fn as_contract(&self) -> RichTerm {
         match self {
             InstanceType::Null => contract_from_predicate(mk_app!(
                 static_access("predicates", ["isType"]),
@@ -93,7 +93,7 @@ impl AsContract for InstanceType {
 }
 
 impl AsLabeledType for InstanceType {
-    fn as_labeled_type(self) -> LabeledType {
+    fn as_labeled_type(&self) -> LabeledType {
         let types = match self {
             InstanceType::Boolean => TypeF::Bool.into(),
             InstanceType::Array => TypeF::Array(Box::new(Types::from(TypeF::Dyn))).into(),
@@ -110,8 +110,8 @@ impl AsLabeledType for InstanceType {
     }
 }
 
-impl TryAsLabeledType for &SchemaObject {
-    fn try_as_labeled_type(self) -> Option<LabeledType> {
+impl TryAsLabeledType for SchemaObject {
+    fn try_as_labeled_type(&self) -> Option<LabeledType> {
         match self {
             SchemaObject {
                 metadata: _,
@@ -133,8 +133,8 @@ impl TryAsLabeledType for &SchemaObject {
     }
 }
 
-impl TryAsLabeledType for &Schema {
-    fn try_as_labeled_type(self) -> Option<LabeledType> {
+impl TryAsLabeledType for Schema {
+    fn try_as_labeled_type(&self) -> Option<LabeledType> {
         match self {
             Schema::Bool(_) => None,
             Schema::Object(obj) => obj.try_as_labeled_type(),
@@ -142,8 +142,8 @@ impl TryAsLabeledType for &Schema {
     }
 }
 
-impl TryAsContract for &ObjectValidation {
-    fn try_as_contract(self) -> Option<RichTerm> {
+impl TryAsContract for ObjectValidation {
+    fn try_as_contract(&self) -> Option<RichTerm> {
         fn is_open_record(additional: Option<&Schema>) -> bool {
             match additional {
                 Some(Schema::Bool(open)) => *open,
@@ -178,8 +178,8 @@ impl TryAsContract for &ObjectValidation {
     }
 }
 
-impl TryAsContract for &SchemaObject {
-    fn try_as_contract(self) -> Option<RichTerm> {
+impl TryAsContract for SchemaObject {
+    fn try_as_contract(&self) -> Option<RichTerm> {
         match self {
             // a reference to a definition
             SchemaObject {
@@ -239,8 +239,8 @@ impl TryAsContract for &SchemaObject {
     }
 }
 
-impl TryAsContract for &Schema {
-    fn try_as_contract(self) -> Option<RichTerm> {
+impl TryAsContract for Schema {
+    fn try_as_contract(&self) -> Option<RichTerm> {
         match self {
             Schema::Bool(_) => None,
             Schema::Object(obj) => obj.try_as_contract(),
@@ -249,9 +249,9 @@ impl TryAsContract for &Schema {
 }
 
 impl AsLabeledType for RichTerm {
-    fn as_labeled_type(self) -> LabeledType {
+    fn as_labeled_type(&self) -> LabeledType {
         LabeledType {
-            types: TypeF::Flat(self).into(),
+            types: TypeF::Flat(self.clone()).into(),
             label: Label::dummy(),
         }
     }
