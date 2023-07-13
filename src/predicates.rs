@@ -412,6 +412,10 @@ fn dependencies(extensions: &BTreeMap<String, Value>) -> impl Iterator<Item = Ri
 }
 
 pub fn schema_object_to_predicate(o: &SchemaObject) -> RichTerm {
+    // NOTE: You may naively think that, for instance, numbers and strings are
+    // mutually exclusive. Not to a json schema! Any number of these fields can
+    // be set and the semantics is they get ANDed together, even if that can
+    // never pass.
     let SchemaObject {
         metadata: _,
         instance_type,
@@ -442,6 +446,9 @@ pub fn schema_object_to_predicate(o: &SchemaObject) -> RichTerm {
                     .as_deref()
                     .map(|r| definitions::reference(r).predicate),
             )
+            // schema.rs parses dependencies incorrectly. It should really be
+            // part of object validation (object_predicates()) but it gets put
+            // in extensions instead.
             .chain(dependencies(extensions)),
     )
 }
