@@ -19,8 +19,8 @@ use nickel_lang_core::{
 use schemars::schema::Schema;
 
 use crate::{
-    contracts::{contract_from_predicate, TryIntoContract},
-    predicates::IntoPredicate,
+    contracts::{contract_from_predicate, TryAsContract},
+    predicates::AsPredicate,
     utils::static_access,
 };
 
@@ -115,12 +115,12 @@ impl From<&BTreeMap<String, Schema>> for Environment {
         let terms = defs
             .iter()
             .map(|(name, schema)| {
-                let predicate = schema.into_predicate();
+                let predicate = schema.as_predicate();
                 (
                     name.clone(),
                     ConvertedSchema {
                         contract: schema
-                            .try_into_contract()
+                            .try_as_contract()
                             .unwrap_or_else(|| contract_from_predicate(access(name).predicate)),
                         predicate,
                     },
