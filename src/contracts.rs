@@ -39,26 +39,26 @@ use nickel_lang_core::{
 };
 use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec};
 
-use crate::{definitions, predicates::AsPredicate, utils::static_access};
+use crate::{definitions, predicates::IntoPredicate, utils::static_access};
 
 /// Convert to a Nickel [`RichtTerm`] representing a contract.
-pub trait AsContract {
-    fn as_contract(self) -> RichTerm;
+pub trait IntoContract {
+    fn into_contract(self) -> RichTerm;
 }
 
 /// Convert to a Nickel [`RichtTerm`] representing a contract, if possible.
-pub trait TryAsContract {
-    fn try_as_contract(self) -> Option<RichTerm>;
+pub trait TryIntoContract {
+    fn try_into_contract(self) -> Option<RichTerm>;
 }
 
 /// Convert to a Nickel [`LabeledType`]
-pub trait AsLabeledType {
-    fn as_labeled_type(self) -> LabeledType;
+pub trait IntoLabeledType {
+    fn into_labeled_type(self) -> LabeledType;
 }
 
 /// Convert to a Nickel [`LabeledType`], if possible.
-pub trait TryAsLabeledType {
-    fn try_as_labeled_type(self) -> Option<LabeledType>;
+pub trait TryIntoLabeledType {
+    fn try_into_labeled_type(self) -> Option<LabeledType>;
 }
 
 /// Convert an [`InstanceType`] into a Nickel [`RichTerm`]. We're in a bit of a
@@ -71,8 +71,8 @@ pub trait TryAsLabeledType {
 /// we passed this directly to Nickel as a `RichTerm`, it would be an error,
 /// but the pretty printer not understanding that builtin type names are not
 /// valid identifiers.
-impl AsContract for InstanceType {
-    fn as_contract(self) -> RichTerm {
+impl IntoContract for InstanceType {
+    fn into_contract(self) -> RichTerm {
         match self {
             InstanceType::Null => contract_from_predicate(mk_app!(
                 static_access("predicates", ["isType"]),
@@ -92,15 +92,15 @@ impl AsContract for InstanceType {
     }
 }
 
-impl AsLabeledType for InstanceType {
-    fn as_labeled_type(self) -> LabeledType {
+impl IntoLabeledType for InstanceType {
+    fn into_labeled_type(self) -> LabeledType {
         let types = match self {
             InstanceType::Boolean => TypeF::Bool.into(),
             InstanceType::Array => TypeF::Array(Box::new(Types::from(TypeF::Dyn))).into(),
             InstanceType::Number => TypeF::Number.into(),
             InstanceType::String => TypeF::String.into(),
             InstanceType::Null | InstanceType::Object | InstanceType::Integer => {
-                TypeF::Flat(self.as_contract()).into()
+                TypeF::Flat(self.into_contract()).into()
             }
         };
         LabeledType {
@@ -110,8 +110,8 @@ impl AsLabeledType for InstanceType {
     }
 }
 
-impl TryAsLabeledType for &SchemaObject {
-    fn try_as_labeled_type(self) -> Option<LabeledType> {
+impl TryIntoLabeledType for &SchemaObject {
+    fn try_into_labeled_type(self) -> Option<LabeledType> {
         match self {
             SchemaObject {
                 metadata: _,
@@ -127,23 +127,23 @@ impl TryAsLabeledType for &SchemaObject {
                 reference: None, /* TODO(vkleen): We should be able to relax this once we properly
                                   * track references */
                 extensions,
-            } if extensions.is_empty() => Some(instance_type.as_labeled_type()),
+            } if extensions.is_empty() => Some(instance_type.into_labeled_type()),
             _ => None,
         }
     }
 }
 
-impl TryAsLabeledType for &Schema {
-    fn try_as_labeled_type(self) -> Option<LabeledType> {
+impl TryIntoLabeledType for &Schema {
+    fn try_into_labeled_type(self) -> Option<LabeledType> {
         match self {
             Schema::Bool(_) => None,
-            Schema::Object(obj) => obj.try_as_labeled_type(),
+            Schema::Object(obj) => obj.try_into_labeled_type(),
         }
     }
 }
 
-impl TryAsContract for &ObjectValidation {
-    fn try_as_contract(self) -> Option<RichTerm> {
+impl TryIntoContract for &ObjectValidation {
+    fn try_into_contract(self) -> Option<RichTerm> {
         fn is_open_record(additional: Option<&Schema>) -> bool {
             match additional {
                 Some(Schema::Bool(open)) => *open,
@@ -178,8 +178,8 @@ impl TryAsContract for &ObjectValidation {
     }
 }
 
-impl TryAsContract for &SchemaObject {
-    fn try_as_contract(self) -> Option<RichTerm> {
+impl TryIntoContract for &SchemaObject {
+    fn try_into_contract(self) -> Option<RichTerm> {
         match self {
             // a reference to a definition
             SchemaObject {
@@ -232,24 +232,24 @@ impl TryAsContract for &SchemaObject {
                 reference: None,
                 extensions,
             } if **instance_type == InstanceType::Object && extensions.is_empty() => {
-                ov.as_ref().try_as_contract()
+                ov.as_ref().try_into_contract()
             }
             _ => None,
         }
     }
 }
 
-impl TryAsContract for &Schema {
-    fn try_as_contract(self) -> Option<RichTerm> {
+impl TryIntoContract for &Schema {
+    fn try_into_contract(self) -> Option<RichTerm> {
         match self {
             Schema::Bool(_) => None,
-            Schema::Object(obj) => obj.try_as_contract(),
+            Schema::Object(obj) => obj.try_into_contract(),
         }
     }
 }
 
-impl AsLabeledType for RichTerm {
-    fn as_labeled_type(self) -> LabeledType {
+impl IntoLabeledType for RichTerm {
+    fn into_labeled_type(self) -> LabeledType {
         LabeledType {
             types: TypeF::Flat(self).into(),
             label: Label::dummy(),
@@ -267,12 +267,12 @@ fn generate_record_contract(
             // record fields where anything is allowed should look like
             // { a, b } not { a | predicates.always, b | predicates.always }
             vec![]
-        } else if let Some(t) = schema.try_as_labeled_type() {
+        } else if let Some(t) = schema.try_into_labeled_type() {
             vec![t]
-        } else if let Some(term) = schema.try_as_contract() {
-            vec![term.as_labeled_type()]
+        } else if let Some(term) = schema.try_into_contract() {
+            vec![term.into_labeled_type()]
         } else {
-            vec![contract_from_predicate(schema.as_predicate()).as_labeled_type()]
+            vec![contract_from_predicate(schema.into_predicate()).into_labeled_type()]
         };
         (
             name.into(),
