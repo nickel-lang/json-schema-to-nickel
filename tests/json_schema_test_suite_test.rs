@@ -2,9 +2,10 @@ use std::io::stderr;
 
 use json_schema_test_suite::{json_schema_test_suite, TestCase};
 use json_schema_to_nickel::{
-    definitions::Environment, predicates::schema_to_predicate, root_schema, wrap_predicate,
+    definitions::Environment, predicates::AsPredicate, root_schema, wrap_predicate,
 };
 use nickel_lang_core::{eval::cache::lazy::CBNCache, program::Program, term::RichTerm};
+use schemars::schema::Schema;
 use stringreader::StringReader;
 
 #[json_schema_test_suite("vendor/JSON-Schema-Test-Suite", "draft7", {
@@ -37,7 +38,7 @@ fn translation_typecheck_test(
     } else {
         wrap_predicate(
             Environment::empty(),
-            schema_to_predicate(&dbg!(serde_json::from_value(test_case.schema).unwrap())),
+            dbg!(serde_json::from_value::<Schema>(test_case.schema).unwrap()).as_predicate(),
         )
     };
 

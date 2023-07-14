@@ -24,10 +24,10 @@ pub mod definitions;
 pub mod predicates;
 pub(crate) mod utils;
 
-use contracts::{contract_from_predicate, schema_object_to_contract};
+use contracts::{contract_from_predicate, TryAsContract};
 use definitions::Environment;
 use nickel_lang_core::term::{RichTerm, Term};
-use predicates::schema_object_to_predicate;
+use predicates::AsPredicate;
 use schemars::schema::RootSchema;
 
 /// Convert a [`RootSchema`] into a Nickel contract. If the JSON schema is
@@ -35,10 +35,10 @@ use schemars::schema::RootSchema;
 /// Otherwise, we fall back to generating a predicate.
 pub fn root_schema(root: &RootSchema) -> RichTerm {
     let env = Environment::from(&root.definitions);
-    if let Some(contract) = schema_object_to_contract(&root.schema) {
+    if let Some(contract) = root.schema.try_as_contract() {
         wrap_contract(env, contract)
     } else {
-        let predicate = schema_object_to_predicate(&root.schema);
+        let predicate = root.schema.as_predicate();
         wrap_predicate(env, predicate)
     }
 }
