@@ -46,7 +46,7 @@ pub trait AsContract {
     fn as_contract(&self) -> RichTerm;
 }
 
-/// Convert to a Nickel [`RichtTerm`] representing a contract, if possible.
+/// Convert to a Nickel [`RichTerm`] representing a contract, if possible.
 pub trait TryAsContract {
     fn try_as_contract(&self) -> Option<RichTerm>;
 }
