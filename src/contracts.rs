@@ -41,7 +41,7 @@ use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, Sin
 
 use crate::{definitions, predicates::AsPredicate, utils::static_access};
 
-/// Convert to a Nickel [`RichtTerm`] representing a contract.
+/// Convert to a Nickel [`RichTerm`] representing a contract.
 pub trait AsContract {
     fn as_contract(&self) -> RichTerm;
 }
