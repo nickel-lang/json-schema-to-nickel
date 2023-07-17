@@ -19,7 +19,7 @@ use nickel_lang_core::{
 use schemars::schema::Schema;
 
 use crate::{
-    contracts::{contract_from_predicate, TryAsContract},
+    contracts::{contract_from_predicate, Contract},
     predicates::AsPredicate,
     utils::static_access,
 };
@@ -28,7 +28,7 @@ use crate::{
 #[derive(Clone)]
 pub struct ConvertedSchema {
     predicate: RichTerm,
-    contract: RichTerm,
+    contract: Contract,
 }
 
 /// The field access for referencing the predicate or contract generated from a
@@ -72,7 +72,7 @@ impl Environment {
         let contracts = self
             .0
             .iter()
-            .map(|(k, v)| (Ident::from(k), v.contract.clone()))
+            .map(|(k, v)| (Ident::from(k), v.contract.clone().into()))
             .collect();
         let predicates = self
             .0
@@ -119,9 +119,9 @@ impl From<&BTreeMap<String, Schema>> for Environment {
                 (
                     name.clone(),
                     ConvertedSchema {
-                        contract: schema
-                            .try_as_contract()
-                            .unwrap_or_else(|| contract_from_predicate(access(name).predicate)),
+                        contract: Contract::try_from(schema)
+                            .unwrap_or_else(|()| contract_from_predicate(access(name).predicate))
+                            .into(),
                         predicate,
                     },
                 )

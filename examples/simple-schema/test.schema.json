@@ -29,6 +29,14 @@
         null
       ]
     },
+    "my_reasonable_enum": {
+      "type": "string",
+      "enum": [
+        "foo",
+        "bar",
+        "baz"
+      ]
+    },
     "my_nullable_enum": {
       "anyOf": [
         {
