@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, iter};
 
 use nickel_lang_core::{
     identifier::Ident,
@@ -13,24 +13,60 @@ use serde_json::Value;
 
 use crate::{definitions, utils::static_access};
 
-pub trait AsPredicate {
-    fn as_predicate(&self) -> RichTerm;
+#[derive(Clone)]
+pub struct Predicate(RichTerm);
+
+impl From<RichTerm> for Predicate {
+    fn from(rt: RichTerm) -> Self {
+        Predicate(rt)
+    }
 }
 
-pub trait AsPredicates {
-    // TODO: Turn Vec<_> into Iterator<Item = _> when RPTIT is implemented
-    // SEE: https://rust-lang.github.io/impl-trait-initiative/RFCs/rpit-in-traits.html
-    fn as_predicates(&self) -> Vec<RichTerm>;
+impl From<Term> for Predicate {
+    fn from(t: Term) -> Self {
+        Predicate(t.into())
+    }
 }
 
-fn or_always(s: Option<&Schema>) -> RichTerm {
-    s.map(|s| s.as_predicate())
-        .unwrap_or(static_access("predicates", ["always"]))
+impl From<Predicate> for RichTerm {
+    fn from(Predicate(rt): Predicate) -> Self {
+        rt
+    }
 }
 
-impl AsPredicate for InstanceType {
-    fn as_predicate(&self) -> RichTerm {
-        let type_tag = match self {
+// Orphan rule means we have to wrap in a newtype in order to impl From
+struct Predicates(Vec<Predicate>);
+
+impl From<Predicates> for Vec<Predicate> {
+    fn from(Predicates(preds): Predicates) -> Self {
+        preds
+    }
+}
+
+impl From<Vec<Predicate>> for Predicates {
+    fn from(value: Vec<Predicate>) -> Self {
+        Predicates(value)
+    }
+}
+
+impl IntoIterator for Predicates {
+    type Item = <Vec<Predicate> as IntoIterator>::Item;
+
+    type IntoIter = <Vec<Predicate> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+fn or_always(s: Option<&Schema>) -> Predicate {
+    s.map(Predicate::from)
+        .unwrap_or(Predicate::from(static_access("predicates", ["always"])))
+}
+
+impl From<&InstanceType> for Predicate {
+    fn from(value: &InstanceType) -> Self {
+        let type_tag = match value {
             InstanceType::Null => Term::Enum("Null".into()),
             InstanceType::Boolean => Term::Enum("Bool".into()),
             InstanceType::Object => Term::Enum("Record".into()),
@@ -39,80 +75,101 @@ impl AsPredicate for InstanceType {
             InstanceType::String => Term::Enum("String".into()),
             InstanceType::Integer => Term::Enum("Integer".into()),
         };
-        mk_app!(static_access("predicates", ["isType"]), type_tag)
+        mk_app!(static_access("predicates", ["isType"]), type_tag).into()
     }
 }
 
-impl AsPredicate for SingleOrVec<InstanceType> {
-    fn as_predicate(&self) -> RichTerm {
-        match self {
-            SingleOrVec::Single(t) => t.as_predicate(),
+impl From<&SingleOrVec<InstanceType>> for Predicate {
+    fn from(value: &SingleOrVec<InstanceType>) -> Self {
+        match value {
+            SingleOrVec::Single(t) => t.as_ref().into(),
             SingleOrVec::Vec(ts) => mk_app!(
                 static_access("predicates", ["anyOf"]),
                 Term::Array(
-                    Array::new(ts.iter().map(|t| t.as_predicate()).collect()),
+                    Array::new(ts.iter().map(|t| Predicate::from(t).into()).collect()),
                     Default::default()
                 )
-            ),
+            )
+            .into(),
         }
     }
 }
 
-/// Convert a json schema Enum to a predicate. Enums are represented by `[Value]`s.
-impl AsPredicate for [Value] {
-    fn as_predicate(&self) -> RichTerm {
+/// Convert a json schema Enum to a predicate. Enums are represented by
+/// `[Value]`s.
+impl From<&[Value]> for Predicate {
+    fn from(value: &[Value]) -> Self {
         mk_app!(
             static_access("predicates", ["enum"]),
             Term::Array(
                 Array::new(
-                    self.iter()
+                    value
+                        .iter()
                         .map(|v| serde_json::from_value(v.clone()).unwrap())
                         .collect()
                 ),
                 Default::default()
             )
         )
+        .into()
     }
 }
 
-/// Convert a json schema Const to a predicate. Consts are represented by `Value`s
-impl AsPredicate for Value {
-    fn as_predicate(&self) -> RichTerm {
+/// Convert a json schema Const to a predicate. Consts are represented by
+/// `Value`s
+impl From<&Value> for Predicate {
+    fn from(value: &Value) -> Self {
         Term::App(
             static_access("predicates", ["const"]),
-            serde_json::from_value(self.clone()).unwrap(),
+            serde_json::from_value(value.clone()).unwrap(),
         )
         .into()
     }
 }
 
-fn mk_all_of(schemas: impl IntoIterator<Item = RichTerm>) -> RichTerm {
-    let schemas: Vec<_> = schemas.into_iter().collect();
-    match schemas.as_slice() {
-        [] => static_access("predicates", ["always"]),
-        [t] => t.clone(),
-        _ => mk_app!(
-            static_access("predicates", ["allOf"]),
-            Term::Array(Array::from_iter(schemas), Default::default())
-        ),
+fn mk_all_of(preds: impl IntoIterator<Item = Predicate>) -> Predicate {
+    let mut ps = preds.into_iter();
+    match (ps.next(), ps.next()) {
+        // []
+        (None, _) => static_access("predicates", ["always"]).into(),
+        // [p]
+        (Some(p), None) => p,
+        // ps
+        (Some(p1), Some(p2)) => {
+            // reconstruct the full iterator
+            let ps = iter::once(p1).chain(iter::once(p2)).chain(ps);
+            mk_app!(
+                static_access("predicates", ["allOf"]),
+                Term::Array(Array::from_iter(ps.map(RichTerm::from)), Default::default())
+            )
+            .into()
+        }
     }
 }
 
-fn mk_any_of(schemas: impl IntoIterator<Item = RichTerm>) -> RichTerm {
-    let schemas: Vec<_> = schemas.into_iter().collect();
-    match schemas.as_slice() {
-        [] => static_access("predicates", ["always"]),
-        [t] => t.clone(),
-        _ => mk_app!(
-            static_access("predicates", ["anyOf"]),
-            Term::Array(Array::from_iter(schemas), Default::default())
-        ),
+fn mk_any_of(preds: impl IntoIterator<Item = Predicate>) -> Predicate {
+    let mut ps = preds.into_iter();
+    match (ps.next(), ps.next()) {
+        // []
+        (None, _) => static_access("predicates", ["always"]).into(),
+        // [p]
+        (Some(p), None) => p,
+        // ps
+        (Some(p1), Some(p2)) => {
+            // reconstruct the full iterator
+            let ps = iter::once(p1).chain(iter::once(p2)).chain(ps);
+            mk_app!(
+                static_access("predicates", ["anyOf"]),
+                Term::Array(Array::from_iter(ps.map(RichTerm::from)), Default::default())
+            )
+            .into()
+        }
     }
 }
 
-impl AsPredicates for SubschemaValidation {
-    fn as_predicates(&self) -> Vec<RichTerm> {
-        let SubschemaValidation {
+impl From<&SubschemaValidation> for Predicates {
+    fn from(
+        SubschemaValidation {
             all_of,
             any_of,
             one_of,
@@ -120,16 +177,16 @@ impl AsPredicates for SubschemaValidation {
             if_schema,
             then_schema,
             else_schema,
-        } = self;
-
+        }: &SubschemaValidation,
+    ) -> Self {
         let all_of = all_of
             .as_deref()
-            .map(|schemas| mk_all_of(schemas.iter().map(|s| s.as_predicate())))
+            .map(|schemas| mk_all_of(schemas.iter().map(Predicate::from)))
             .into_iter();
 
         let any_of = any_of
             .as_deref()
-            .map(|schemas| mk_any_of(schemas.iter().map(|s| s.as_predicate())))
+            .map(|schemas| mk_any_of(schemas.iter().map(Predicate::from)))
             .into_iter();
 
         let one_of = one_of
@@ -138,16 +195,17 @@ impl AsPredicates for SubschemaValidation {
                 mk_app!(
                     static_access("predicates", ["oneOf"]),
                     Term::Array(
-                        Array::new(schemas.iter().map(|schema| schema.as_predicate()).collect()),
+                        Array::new(schemas.iter().map(|s| Predicate::from(s).into()).collect()),
                         Default::default()
                     )
                 )
+                .into()
             })
             .into_iter();
 
         let not = not
             .as_deref()
-            .map(|s| mk_app!(static_access("predicates", ["not"]), s.as_predicate()))
+            .map(|s| mk_app!(static_access("predicates", ["not"]), Predicate::from(s)).into())
             .into_iter();
 
         let ite = if_schema
@@ -155,38 +213,42 @@ impl AsPredicates for SubschemaValidation {
             .map(move |if_schema| {
                 mk_app!(
                     static_access("predicates", ["ifThenElse"]),
-                    if_schema.as_predicate(),
+                    Predicate::from(if_schema),
                     or_always(then_schema.as_deref()),
                     or_always(else_schema.as_deref())
                 )
+                .into()
             })
             .into_iter();
 
-        all_of
-            .chain(any_of)
-            .chain(one_of)
-            .chain(not)
-            .chain(ite)
-            .collect()
+        Predicates(
+            all_of
+                .chain(any_of)
+                .chain(one_of)
+                .chain(not)
+                .chain(ite)
+                .collect(),
+        )
     }
 }
 
-impl AsPredicates for NumberValidation {
-    fn as_predicates(&self) -> Vec<RichTerm> {
-        let NumberValidation {
+impl From<&NumberValidation> for Predicates {
+    fn from(
+        NumberValidation {
             multiple_of,
             maximum,
             exclusive_maximum,
             minimum,
             exclusive_minimum,
-        } = self;
-
-        fn predicate(s: &str) -> impl '_ + FnOnce(f64) -> RichTerm {
+        }: &NumberValidation,
+    ) -> Self {
+        fn predicate(s: &str) -> impl '_ + FnOnce(f64) -> Predicate {
             move |n| {
                 mk_app!(
                     static_access("predicates", ["numbers", s]),
                     Term::Num(Number::try_from_float_simplest(n).unwrap())
                 )
+                .into()
             }
         }
 
@@ -200,29 +262,32 @@ impl AsPredicates for NumberValidation {
             .map(predicate("exclusiveMinimum"))
             .into_iter();
 
-        multiple_of
-            .chain(maximum)
-            .chain(exclusive_maximum)
-            .chain(minimum)
-            .chain(exclusive_minimum)
-            .collect()
+        Predicates(
+            multiple_of
+                .chain(maximum)
+                .chain(exclusive_maximum)
+                .chain(minimum)
+                .chain(exclusive_minimum)
+                .collect(),
+        )
     }
 }
 
-impl AsPredicates for StringValidation {
-    fn as_predicates(&self) -> Vec<RichTerm> {
-        let StringValidation {
+impl From<&StringValidation> for Predicates {
+    fn from(
+        StringValidation {
             max_length,
             min_length,
             pattern,
-        } = self;
-
+        }: &StringValidation,
+    ) -> Self {
         let max_length = max_length
             .map(|n| {
                 mk_app!(
                     static_access("predicates", ["strings", "maxLength"]),
                     Term::Num(n.into())
                 )
+                .into()
             })
             .into_iter();
 
@@ -232,6 +297,7 @@ impl AsPredicates for StringValidation {
                     static_access("predicates", ["strings", "minLength"]),
                     Term::Num(n.into())
                 )
+                .into()
             })
             .into_iter();
 
@@ -242,46 +308,50 @@ impl AsPredicates for StringValidation {
                     static_access("predicates", ["strings", "pattern"]),
                     make::string(s)
                 )
+                .into()
             })
             .into_iter();
 
-        max_length.chain(min_length).chain(pattern).collect()
+        Predicates(max_length.chain(min_length).chain(pattern).collect())
     }
 }
 
-impl AsPredicates for ArrayValidation {
-    fn as_predicates(&self) -> Vec<RichTerm> {
-        let ArrayValidation {
+impl From<&ArrayValidation> for Predicates {
+    fn from(
+        ArrayValidation {
             items,
             additional_items,
             max_items,
             min_items,
             unique_items,
             contains,
-        } = self;
-
+        }: &ArrayValidation,
+    ) -> Self {
         let items = match items {
             None => vec![],
             Some(SingleOrVec::Single(s)) => vec![mk_app!(
                 static_access("predicates", ["arrays", "arrayOf"]),
-                s.as_predicate()
-            )],
+                Predicate::from(s.as_ref())
+            )
+            .into()],
             Some(SingleOrVec::Vec(schemas)) => {
                 let len = schemas.len();
                 [mk_app!(
                     static_access("predicates", ["arrays", "items"]),
                     Term::Array(
-                        Array::new(schemas.iter().map(|x| x.as_predicate()).collect()),
+                        Array::new(schemas.iter().map(|x| Predicate::from(x).into()).collect()),
                         Default::default()
                     )
-                )]
+                )
+                .into()]
                 .into_iter()
                 .chain(additional_items.as_deref().map(|s| {
                     mk_app!(
                         static_access("predicates", ["arrays", "additionalItems"]),
-                        s.as_predicate(),
+                        Predicate::from(s),
                         Term::Num(len.into())
                     )
+                    .into()
                 }))
                 .collect()
             }
@@ -294,6 +364,7 @@ impl AsPredicates for ArrayValidation {
                     static_access("predicates", ["arrays", "maxItems"]),
                     Term::Num(n.into())
                 )
+                .into()
             })
             .into_iter();
 
@@ -303,12 +374,13 @@ impl AsPredicates for ArrayValidation {
                     static_access("predicates", ["arrays", "minItems"]),
                     Term::Num(n.into())
                 )
+                .into()
             })
             .into_iter();
 
         let unique_items = unique_items
             .and_then(|unique| {
-                unique.then_some(static_access("predicates", ["arrays", "uniqueItems"]))
+                unique.then_some(static_access("predicates", ["arrays", "uniqueItems"]).into())
             })
             .into_iter();
 
@@ -317,23 +389,26 @@ impl AsPredicates for ArrayValidation {
             .map(|s| {
                 mk_app!(
                     static_access("predicates", ["arrays", "contains"]),
-                    s.as_predicate()
+                    Predicate::from(s)
                 )
+                .into()
             })
             .into_iter();
 
-        items
-            .chain(max_items)
-            .chain(min_items)
-            .chain(unique_items)
-            .chain(contains)
-            .collect()
+        Predicates(
+            items
+                .chain(max_items)
+                .chain(min_items)
+                .chain(unique_items)
+                .chain(contains)
+                .collect(),
+        )
     }
 }
 
-impl AsPredicates for ObjectValidation {
-    fn as_predicates(&self) -> Vec<RichTerm> {
-        let ObjectValidation {
+impl From<&ObjectValidation> for Predicates {
+    fn from(
+        ObjectValidation {
             max_properties,
             min_properties,
             required,
@@ -341,14 +416,15 @@ impl AsPredicates for ObjectValidation {
             pattern_properties,
             additional_properties,
             property_names,
-        } = self;
-
+        }: &ObjectValidation,
+    ) -> Self {
         let max_properties = max_properties
             .map(|n| {
                 mk_app!(
                     static_access("predicates", ["records", "maxProperties"]),
                     Term::Num(n.into())
                 )
+                .into()
             })
             .into_iter();
 
@@ -358,6 +434,7 @@ impl AsPredicates for ObjectValidation {
                     static_access("predicates", ["records", "minProperties"]),
                     Term::Num(n.into())
                 )
+                .into()
             })
             .into_iter();
 
@@ -366,8 +443,9 @@ impl AsPredicates for ObjectValidation {
             .map(|s| {
                 mk_app!(
                     static_access("predicates", ["records", "propertyNames"]),
-                    s.as_predicate()
+                    Predicate::from(s)
                 )
+                .into()
             })
             .into_iter();
 
@@ -375,13 +453,16 @@ impl AsPredicates for ObjectValidation {
             if required.is_empty() {
                 None
             } else {
-                Some(mk_app!(
-                    static_access("predicates", ["records", "required"]),
-                    Term::Array(
-                        Array::new(required.iter().map(make::string).collect()),
-                        Default::default()
+                Some(
+                    mk_app!(
+                        static_access("predicates", ["records", "required"]),
+                        Term::Array(
+                            Array::new(required.iter().map(make::string).collect()),
+                            Default::default()
+                        )
                     )
-                ))
+                    .into(),
+                )
             }
         }
         .into_iter();
@@ -391,13 +472,13 @@ impl AsPredicates for ObjectValidation {
             Term::Record(RecordData::with_field_values(
                 properties
                     .iter()
-                    .map(|(k, v)| (k.into(), v.as_predicate()))
+                    .map(|(k, v)| (k.into(), Predicate::from(v).into()))
                     .collect()
             )),
             Term::Record(RecordData::with_field_values(
                 pattern_properties
                     .iter()
-                    .map(|(k, v)| (k.into(), v.as_predicate()))
+                    .map(|(k, v)| (k.into(), Predicate::from(v).into()))
                     .collect()
             )),
             Term::Bool(!matches!(
@@ -405,19 +486,22 @@ impl AsPredicates for ObjectValidation {
                 Some(Schema::Bool(false))
             )),
             or_always(additional_properties.as_deref())
-        )]
+        )
+        .into()]
         .into_iter();
 
-        max_properties
-            .chain(min_properties)
-            .chain(property_names)
-            .chain(required)
-            .chain(record)
-            .collect()
+        Predicates(
+            max_properties
+                .chain(min_properties)
+                .chain(property_names)
+                .chain(required)
+                .chain(record)
+                .collect(),
+        )
     }
 }
 
-fn dependencies(extensions: &BTreeMap<String, Value>) -> impl Iterator<Item = RichTerm> {
+fn dependencies(extensions: &BTreeMap<String, Value>) -> impl IntoIterator<Item = Predicate> {
     extensions
         .get("dependencies")
         .and_then(|v| v.as_object())
@@ -440,24 +524,21 @@ fn dependencies(extensions: &BTreeMap<String, Value>) -> impl Iterator<Item = Ri
                                 .into()
                             } else {
                                 serde_json::from_value::<Schema>(value.clone())
-                                    .map(|s| s.as_predicate())
+                                    .map(|s| Predicate::from(&s).into())
                                     .unwrap()
                             }
                         ))
                         .collect()
                 ))
             )
+            .into()
         })
         .into_iter()
 }
 
-impl AsPredicate for SchemaObject {
-    fn as_predicate(&self) -> RichTerm {
-        // NOTE: You may naively think that, for instance, numbers and strings are
-        // mutually exclusive. Not to a json schema! Any number of these fields can
-        // be set and the semantics is they get ANDed together, even if that can
-        // never pass.
-        let SchemaObject {
+impl From<&SchemaObject> for Predicate {
+    fn from(
+        SchemaObject {
             metadata: _,
             instance_type,
             format: _, // TODO(vkleen): deal with string formats
@@ -470,22 +551,23 @@ impl AsPredicate for SchemaObject {
             object,
             reference,
             extensions,
-        } = self;
+        }: &SchemaObject,
+    ) -> Self {
         mk_all_of(
             instance_type
                 .iter()
-                .map(|x| x.as_predicate())
-                .chain(enum_values.as_deref().map(|x| x.as_predicate()))
-                .chain(const_value.as_ref().map(|x| x.as_predicate()))
-                .chain(subschemas.iter().flat_map(|x| x.as_predicates()))
-                .chain(number.iter().flat_map(|x| x.as_predicates()))
-                .chain(string.iter().flat_map(|x| x.as_predicates()))
-                .chain(array.iter().flat_map(|x| x.as_predicates()))
-                .chain(object.iter().flat_map(|x| x.as_predicates()))
+                .map(Predicate::from)
+                .chain(enum_values.as_deref().map(Predicate::from))
+                .chain(const_value.as_ref().map(Predicate::from))
+                .chain(subschemas.iter().flat_map(|x| Predicates::from(x.as_ref())))
+                .chain(number.iter().flat_map(|x| Predicates::from(x.as_ref())))
+                .chain(string.iter().flat_map(|x| Predicates::from(x.as_ref())))
+                .chain(array.iter().flat_map(|x| Predicates::from(x.as_ref())))
+                .chain(object.iter().flat_map(|x| Predicates::from(x.as_ref())))
                 .chain(
                     reference
                         .as_deref()
-                        .map(|r| definitions::reference(r).predicate),
+                        .map(|r| Predicate::from(definitions::reference(r).predicate)),
                 )
                 // schema.rs parses dependencies incorrectly. It should really be
                 // part of object validation (object_predicates()) but it gets put
@@ -495,12 +577,12 @@ impl AsPredicate for SchemaObject {
     }
 }
 
-impl AsPredicate for Schema {
-    fn as_predicate(&self) -> RichTerm {
-        match self {
-            Schema::Bool(true) => static_access("predicates", ["always"]),
-            Schema::Bool(false) => static_access("predicates", ["never"]),
-            Schema::Object(o) => o.as_predicate(),
+impl From<&Schema> for Predicate {
+    fn from(value: &Schema) -> Self {
+        match value {
+            Schema::Bool(true) => static_access("predicates", ["always"]).into(),
+            Schema::Bool(false) => static_access("predicates", ["never"]).into(),
+            Schema::Object(o) => o.into(),
         }
     }
 }

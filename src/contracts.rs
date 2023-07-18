@@ -40,7 +40,7 @@ use nickel_lang_core::{
 use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec};
 use serde_json::Value;
 
-use crate::{definitions, predicates::AsPredicate, utils::static_access};
+use crate::{definitions, predicates::Predicate, utils::static_access};
 
 fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
     const IGNORED_FIELDS: &[&str] = &["$comment"];
@@ -65,7 +65,7 @@ impl From<RichTerm> for Contract {
 impl From<Contract> for RichTerm {
     fn from(Contract(c): Contract) -> Self {
         match c.as_slice() {
-            [] => Schema::Bool(true).as_predicate(),
+            [] => Predicate::from(&Schema::Bool(true)).into(),
             // TODO: shouldn't need to clone here
             [rt] => rt.clone(),
             _ => {
@@ -91,10 +91,13 @@ impl From<TypeF<Box<Types>, RecordRows, EnumRows>> for Contract {
 impl From<&InstanceType> for Contract {
     fn from(value: &InstanceType) -> Contract {
         match value {
-            InstanceType::Null => contract_from_predicate(mk_app!(
-                static_access("predicates", ["isType"]),
-                Term::Enum("Null".into())
-            )),
+            InstanceType::Null => contract_from_predicate(
+                mk_app!(
+                    static_access("predicates", ["isType"]),
+                    Term::Enum("Null".into())
+                )
+                .into(),
+            ),
             InstanceType::Boolean => Contract::from(TypeF::Bool),
             InstanceType::Object => Contract::from(Term::Record(RecordData {
                 attrs: RecordAttrs { open: true },
@@ -333,7 +336,7 @@ fn generate_record_contract(
         let contract = if let Ok(c) = Contract::try_from(schema) {
             c
         } else {
-            contract_from_predicate(schema.as_predicate())
+            contract_from_predicate(Predicate::from(schema))
         };
         (
             name.into(),
@@ -361,7 +364,7 @@ fn generate_record_contract(
 
 /// Convert `predicate` into a contract, suitable for use in a contract
 /// assertion `term | Contract`.
-pub fn contract_from_predicate(predicate: RichTerm) -> Contract {
+pub fn contract_from_predicate(predicate: Predicate) -> Contract {
     mk_app!(
         static_access("predicates", ["contract_from_predicate"]),
         predicate

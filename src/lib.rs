@@ -27,7 +27,7 @@ pub(crate) mod utils;
 use contracts::{contract_from_predicate, Contract};
 use definitions::Environment;
 use nickel_lang_core::term::{RichTerm, Term};
-use predicates::AsPredicate;
+use predicates::Predicate;
 use schemars::schema::RootSchema;
 
 /// Convert a [`RootSchema`] into a Nickel contract. If the JSON schema is
@@ -38,7 +38,7 @@ pub fn root_schema(root: &RootSchema) -> RichTerm {
     if let Ok(contract) = Contract::try_from(&root.schema) {
         wrap_contract(env, contract)
     } else {
-        let predicate = root.schema.as_predicate();
+        let predicate = Predicate::from(&root.schema);
         wrap_predicate(env, predicate)
     }
 }
@@ -56,6 +56,6 @@ pub fn wrap_contract(env: Environment, contract: Contract) -> RichTerm {
 }
 
 /// Convert a predicate into a contract and then wrap it using `wrap_contract`.
-pub fn wrap_predicate(env: Environment, predicate: RichTerm) -> RichTerm {
+pub fn wrap_predicate(env: Environment, predicate: Predicate) -> RichTerm {
     wrap_contract(env, contract_from_predicate(predicate))
 }
