@@ -41,6 +41,13 @@ use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, Sin
 
 use crate::{definitions, predicates::AsPredicate, utils::static_access};
 
+fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
+    const IGNORED_FIELDS: &[&str] = &["$comment"];
+    !extensions
+        .keys()
+        .any(|x| !IGNORED_FIELDS.contains(&x.as_ref()))
+}
+
 /// Convert to a Nickel [`RichTerm`] representing a contract.
 pub trait AsContract {
     fn as_contract(&self) -> RichTerm;
@@ -124,10 +131,10 @@ impl TryAsLabeledType for SchemaObject {
                 string: None,
                 array: None,
                 object: None,
-                reference: None, /* TODO(vkleen): We should be able to relax this once we properly
-                                  * track references */
+                reference: None, /* TODO(vkleen): We should be able to relax this once we
+                                  * properly track references */
                 extensions,
-            } if extensions.is_empty() => Some(instance_type.as_labeled_type()),
+            } if only_ignored_fields(extensions) => Some(instance_type.as_labeled_type()),
             _ => None,
         }
     }
@@ -195,7 +202,9 @@ impl TryAsContract for SchemaObject {
                 object: None,
                 reference: Some(reference),
                 extensions,
-            } if extensions.is_empty() => Some(definitions::reference(reference).contract),
+            } if only_ignored_fields(extensions) => {
+                Some(definitions::reference(reference).contract)
+            }
             // a freeform record
             SchemaObject {
                 metadata: _,
@@ -210,13 +219,15 @@ impl TryAsContract for SchemaObject {
                 object: None,
                 reference: None,
                 extensions,
-            } if **instance_type == InstanceType::Object && extensions.is_empty() => Some(
-                Term::Record(RecordData {
-                    attrs: RecordAttrs { open: true },
-                    ..Default::default()
-                })
-                .into(),
-            ),
+            } if only_ignored_fields(extensions) && **instance_type == InstanceType::Object => {
+                Some(
+                    Term::Record(RecordData {
+                        attrs: RecordAttrs { open: true },
+                        ..Default::default()
+                    })
+                    .into(),
+                )
+            }
             // a record with sub-field types specified
             SchemaObject {
                 metadata: _,
@@ -231,7 +242,7 @@ impl TryAsContract for SchemaObject {
                 object: Some(ov),
                 reference: None,
                 extensions,
-            } if **instance_type == InstanceType::Object && extensions.is_empty() => {
+            } if only_ignored_fields(extensions) && **instance_type == InstanceType::Object => {
                 ov.as_ref().try_as_contract()
             }
             _ => None,
