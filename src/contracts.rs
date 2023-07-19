@@ -257,6 +257,39 @@ impl AsLabeledType for RichTerm {
     }
 }
 
+struct Documentation(String);
+
+impl From<Documentation> for String {
+    fn from(value: Documentation) -> Self {
+        value.0
+    }
+}
+
+impl TryFrom<&SchemaObject> for Documentation {
+    type Error = ();
+
+    fn try_from(value: &SchemaObject) -> Result<Self, Self::Error> {
+        match value {
+            SchemaObject {
+                metadata: Some(metadata),
+                ..
+            } => metadata.description.clone().map(Documentation).ok_or(()),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<&Schema> for Documentation {
+    type Error = ();
+
+    fn try_from(value: &Schema) -> Result<Self, Self::Error> {
+        match value {
+            Schema::Bool(_) => Err(()),
+            Schema::Object(obj) => obj.try_into(),
+        }
+    }
+}
+
 fn generate_record_contract(
     required: &BTreeSet<String>,
     properties: &BTreeMap<String, Schema>,
@@ -283,6 +316,7 @@ fn generate_record_contract(
                         contracts,
                     },
                     opt: !required.contains(name),
+                    doc: Documentation::try_from(schema).map(String::from).ok(),
                     ..Default::default()
                 },
                 ..Default::default()
