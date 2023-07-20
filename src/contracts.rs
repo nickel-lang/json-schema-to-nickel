@@ -49,7 +49,7 @@ fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
         .any(|x| !IGNORED_FIELDS.contains(&x.as_ref()))
 }
 
-/// [`Contract`] Represents the set of contracts that would be applied to a
+/// [`Contract`] represents the set of contracts that would be applied to a
 /// value. This can be empty or many as in `a` or `a | Foo | Bar`, but this
 /// list can also be converted to a single value using `predicates.always` and
 /// std.contract.Sequence
@@ -280,19 +280,23 @@ impl TryFrom<&Schema> for Contract {
     }
 }
 
-impl From<Contract> for Vec<LabeledType> {
+impl From<Contract> for TypeAnnotation {
     fn from(Contract(value): Contract) -> Self {
-        value
-            .into_iter()
-            .map(|rt| LabeledType {
-                types: TypeF::Flat(rt).into(),
-                label: Label::dummy(),
-            })
-            .collect()
+        TypeAnnotation {
+            types: None,
+            contracts: value
+                .into_iter()
+                .map(|rt| LabeledType {
+                    types: TypeF::Flat(rt).into(),
+                    label: Label::dummy(),
+                })
+                .collect(),
+        }
     }
 }
 
-struct Documentation(String);
+#[derive(Clone)]
+pub struct Documentation(String);
 
 impl From<Documentation> for String {
     fn from(value: Documentation) -> Self {
@@ -333,21 +337,16 @@ fn generate_record_contract(
     let fields = properties.iter().map(|(name, schema)| {
         // try to convert to a contract, otherwise convert the predicate version
         // to a contract
-        let contract = if let Ok(c) = Contract::try_from(schema) {
-            c
-        } else {
-            contract_from_predicate(Predicate::from(schema))
-        };
+        let contract = Contract::try_from(schema)
+            .unwrap_or_else(|()| contract_from_predicate(Predicate::from(schema)));
+        let doc = Documentation::try_from(schema).ok();
         (
             name.into(),
             Field {
                 metadata: FieldMetadata {
-                    annotation: TypeAnnotation {
-                        types: None,
-                        contracts: contract.into(),
-                    },
+                    annotation: contract.into(),
                     opt: !required.contains(name),
-                    doc: Documentation::try_from(schema).map(String::from).ok(),
+                    doc: doc.map(String::from),
                     ..Default::default()
                 },
                 ..Default::default()
