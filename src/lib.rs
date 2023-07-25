@@ -24,10 +24,10 @@ pub mod definitions;
 pub mod predicates;
 pub(crate) mod utils;
 
-use contracts::{contract_from_predicate, TryAsContract};
+use contracts::{contract_from_predicate, Contract};
 use definitions::Environment;
 use nickel_lang_core::term::{RichTerm, Term};
-use predicates::AsPredicate;
+use predicates::Predicate;
 use schemars::schema::RootSchema;
 
 /// Convert a [`RootSchema`] into a Nickel contract. If the JSON schema is
@@ -35,27 +35,27 @@ use schemars::schema::RootSchema;
 /// Otherwise, we fall back to generating a predicate.
 pub fn root_schema(root: &RootSchema) -> RichTerm {
     let env = Environment::from(&root.definitions);
-    if let Some(contract) = root.schema.try_as_contract() {
+    if let Ok(contract) = Contract::try_from(&root.schema) {
         wrap_contract(env, contract)
     } else {
-        let predicate = root.schema.as_predicate();
+        let predicate = Predicate::from(&root.schema);
         wrap_predicate(env, predicate)
     }
 }
 
 /// Wrap a Nickel contract making use of the predicates support library and
 /// recursive definitions recorded in `env`.
-pub fn wrap_contract(env: Environment, contract: RichTerm) -> RichTerm {
+pub fn wrap_contract(env: Environment, contract: Contract) -> RichTerm {
     Term::Let(
         "predicates".into(),
         Term::Import("./lib/predicates.ncl".into()).into(),
-        env.wrap(contract),
+        env.wrap(contract.into()),
         Default::default(),
     )
     .into()
 }
 
 /// Convert a predicate into a contract and then wrap it using `wrap_contract`.
-pub fn wrap_predicate(env: Environment, predicate: RichTerm) -> RichTerm {
+pub fn wrap_predicate(env: Environment, predicate: Predicate) -> RichTerm {
     wrap_contract(env, contract_from_predicate(predicate))
 }

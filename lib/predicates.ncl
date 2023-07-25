@@ -69,7 +69,7 @@
       `allOf preds` succeeds if all of the predicates in `preds` succeed
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.7.1]
     "%
-    = fun preds x =>
+   = fun preds x =>
       preds
       |> std.array.fold_right
         (
@@ -114,12 +114,15 @@
       `enum values x` succeeds if and only if `x` is equal to one of the elements of `values`.
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.1.2]
     "%
-    = fun values x =>
+    = let
+      checkEqual = fun input variant =>
+        input == variant || (std.is_enum input && (std.string.from_enum input == variant | Bool))
+    in fun values x =>
       values
       |> std.array.fold_right
         (
           fun value acc =>
-            if x == value then
+            if checkEqual x value then
               { success = true, error = "" }
             else
               acc
