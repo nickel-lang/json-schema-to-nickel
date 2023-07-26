@@ -35,7 +35,7 @@ use nickel_lang_core::{
         record::{Field, FieldMetadata, RecordAttrs, RecordData},
         LabeledType, RichTerm, Term, TypeAnnotation,
     },
-    types::{EnumRows, EnumRowsF, RecordRows, TypeF, Types},
+    typ::{EnumRows, EnumRowsF, RecordRows, Type, TypeF},
 };
 use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec};
 use serde_json::Value;
@@ -82,9 +82,9 @@ impl From<Term> for Contract {
     }
 }
 
-impl From<TypeF<Box<Types>, RecordRows, EnumRows>> for Contract {
-    fn from(value: TypeF<Box<Types>, RecordRows, EnumRows>) -> Self {
-        Contract::from(Term::Types(Types::from(value)))
+impl From<TypeF<Box<Type>, RecordRows, EnumRows>> for Contract {
+    fn from(value: TypeF<Box<Type>, RecordRows, EnumRows>) -> Self {
+        Contract::from(Term::Type(Type::from(value)))
     }
 }
 
@@ -260,7 +260,7 @@ impl TryFrom<&SchemaObject> for Contract {
                         })?;
                 Ok(Contract(vec![
                     static_access("std", ["enum", "TagOrString"]),
-                    Term::Types(TypeF::Enum(enum_rows).into()).into(),
+                    Term::Type(TypeF::Enum(enum_rows).into()).into(),
                 ]))
             }
             _ => Err(()),
@@ -283,11 +283,11 @@ impl TryFrom<&Schema> for Contract {
 impl From<Contract> for TypeAnnotation {
     fn from(Contract(value): Contract) -> Self {
         TypeAnnotation {
-            types: None,
+            typ: None,
             contracts: value
                 .into_iter()
                 .map(|rt| LabeledType {
-                    types: TypeF::Flat(rt).into(),
+                    typ: TypeF::Flat(rt).into(),
                     label: Label::dummy(),
                 })
                 .collect(),
