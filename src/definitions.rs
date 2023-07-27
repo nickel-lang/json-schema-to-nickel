@@ -14,12 +14,15 @@ use std::collections::{BTreeMap, HashMap};
 
 use nickel_lang_core::{
     identifier::Ident,
-    term::{record::RecordData, LetAttrs, RichTerm, Term},
+    term::{
+        record::{Field, FieldMetadata, RecordData},
+        LetAttrs, RichTerm, Term,
+    },
 };
 use schemars::schema::Schema;
 
 use crate::{
-    contracts::{contract_from_predicate, Contract},
+    contracts::{contract_from_predicate, Contract, Documentation},
     predicates::Predicate,
     utils::static_access,
 };
@@ -27,6 +30,7 @@ use crate::{
 /// The nickel predicate and contract generated for a schema.
 #[derive(Clone)]
 pub struct ConvertedSchema {
+    doc: Option<Documentation>,
     predicate: Predicate,
     contract: Contract,
 }
@@ -72,12 +76,36 @@ impl Environment {
         let contracts = self
             .0
             .iter()
-            .map(|(k, v)| (Ident::from(k), v.contract.clone().into()))
+            .map(|(k, v)| {
+                (
+                    Ident::from(k),
+                    Field {
+                        value: Some(v.contract.clone().into()),
+                        metadata: FieldMetadata {
+                            doc: v.doc.clone().map(String::from),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+            })
             .collect();
         let predicates = self
             .0
             .into_iter()
-            .map(|(k, v)| (Ident::from(k), v.predicate.into()))
+            .map(|(k, v)| {
+                (
+                    Ident::from(k),
+                    Field {
+                        value: Some(v.predicate.into()),
+                        metadata: FieldMetadata {
+                            doc: v.doc.map(String::from),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+            })
             .collect();
         Term::Let(
             "definitions".into(),
@@ -85,11 +113,19 @@ impl Environment {
                 [
                     (
                         Ident::from("contract"),
-                        Term::Record(RecordData::with_field_values(contracts)).into(),
+                        Term::Record(RecordData {
+                            fields: contracts,
+                            ..Default::default()
+                        })
+                        .into(),
                     ),
                     (
                         Ident::from("predicate"),
-                        Term::Record(RecordData::with_field_values(predicates)).into(),
+                        Term::Record(RecordData {
+                            fields: predicates,
+                            ..Default::default()
+                        })
+                        .into(),
                     ),
                 ]
                 .into_iter()
@@ -115,14 +151,14 @@ impl From<&BTreeMap<String, Schema>> for Environment {
         let terms = defs
             .iter()
             .map(|(name, schema)| {
-                let predicate = Predicate::from(schema);
                 (
                     name.clone(),
                     ConvertedSchema {
+                        doc: Documentation::try_from(schema).ok(),
                         contract: Contract::try_from(schema).unwrap_or_else(|()| {
                             contract_from_predicate(Predicate::from(access(name).predicate))
                         }),
-                        predicate,
+                        predicate: Predicate::from(schema),
                     },
                 )
             })

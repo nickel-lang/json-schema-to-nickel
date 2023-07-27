@@ -17,7 +17,7 @@ let rec definitions = {
               predicates.isType 'Record,
               predicates.records.required ["StringNewType"],
               predicates.records.record
-                { StringNewType = predicates.isType 'String, }
+                { StringNewType = predicates.isType '"String", }
                 {}
                 false
                 predicates.never
@@ -40,7 +40,7 @@ let rec definitions = {
                                 [
                                   predicates.isType '"Array",
                                   predicates.arrays.arrayOf
-                                    (predicates.isType 'Number)
+                                    (predicates.isType '"Number")
                                 ],
                           }
                           {}
@@ -61,7 +61,7 @@ let rec definitions = {
           predicates.records.record
             {
               bar = predicates.isType '"Bool",
-              foo = predicates.isType 'String,
+              foo = predicates.isType '"String",
             }
             {}
             false
@@ -84,5 +84,6 @@ in
       (predicates.anyOf [definitions.predicate.MyEnum, predicates.isType 'Null])
     | optional,
   my_object | definitions.contract.MyObject,
+  my_reasonable_enum | std.enum.TagOrString | [| 'baz, 'bar, 'foo |] | optional,
   ..
 }
