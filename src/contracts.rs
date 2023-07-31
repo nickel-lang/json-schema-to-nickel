@@ -43,7 +43,7 @@ use serde_json::Value;
 use crate::{definitions, predicates::Predicate, utils::static_access};
 
 fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
-    const IGNORED_FIELDS: &[&str] = &["$comment"];
+    const IGNORED_FIELDS: &[&str] = &["$comment", "default"];
     !extensions
         .keys()
         .any(|x| !IGNORED_FIELDS.contains(&x.as_ref()))
