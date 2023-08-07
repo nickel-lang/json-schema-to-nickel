@@ -41,7 +41,7 @@ fn inline_imports(path: impl Into<OsString>) -> Result<RichTerm, Box<dyn Error>>
         let path = &path.into();
         let file_id = cache.add_file(path.clone())?;
         let lexer = Lexer::new(cache.source(file_id));
-        let rt = parser.parse_strict(file_id, lexer).unwrap();
+        let rt = parser.parse_strict(file_id, lexer)?;
         rt.traverse::<_, _, Box<dyn Error>>(
             &|subterm: RichTerm, cache| {
                 match_sharedterm! { subterm.term, with {
@@ -52,7 +52,6 @@ fn inline_imports(path: impl Into<OsString>) -> Result<RichTerm, Box<dyn Error>>
                     }
                 } else {
                     Ok(subterm)
-                // XXX: how is the formatting supposed to work for these curly braces??
                 }}
             },
             cache,
@@ -68,8 +67,8 @@ fn inline_imports(path: impl Into<OsString>) -> Result<RichTerm, Box<dyn Error>>
 fn main() -> Result<(), Box<dyn Error>> {
     let lib = inline_imports("./lib/predicates.ncl")?;
 
-    let out_dir = env::var_os("OUT_DIR").unwrap();
-    let comptime_rust_lib = Path::new(&out_dir).join("predicates.ncl");
-    fs::write(&comptime_rust_lib, format!("{lib}"))?;
+    let out_dir = env::var_os("OUT_DIR")?;
+    let gen_lib_path = Path::new(&out_dir).join("predicates.ncl");
+    fs::write(&gen_lib_path, format!("{lib}"))?;
     Ok(())
 }
