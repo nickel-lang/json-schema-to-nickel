@@ -993,7 +993,7 @@ checksum = "e4a24736216ec316047a1fc4252e27dabb04218aa4a3f37c6e7ddbf1f9782b54"
 [[package]]
 name = "nickel-lang-core"
 version = "0.1.0"
-source = "git+https://github.com/tweag/nickel?rev=refs/heads/master#0f02aa14b742fc3819e9aff62a5b65b245321357"
+source = "git+https://github.com/tweag/nickel?rev=refs/heads/master#9780a3fea7caa107e33efc041058ee2443dea8d4"
 dependencies = [
  "clap",
  "codespan",

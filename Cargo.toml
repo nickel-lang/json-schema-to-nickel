@@ -17,6 +17,10 @@ schemars = "^0.8"
 serde_json = "^1.0"
 terminal_size = "^0.2"
 
+[build-dependencies]
+# TODO: make this definitionally the same as the non-build dependency
+nickel-lang-core = { git = "https://github.com/tweag/nickel", rev = "refs/heads/master", default-features = false }
+
 [dev-dependencies]
 json_schema_test_suite = "^0.3"
 lazy_static = "^1.4"
