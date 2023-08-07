@@ -7,9 +7,9 @@ use std::{
 };
 
 use nickel_lang_core::{
-    cache::{Cache, ErrorTolerance},
+    eval::cache::CacheImpl,
     match_sharedterm,
-    parser::{grammar::TermParser, lexer::Lexer, ErrorTolerantParser},
+    program::Program,
     term::{RichTerm, Term, Traverse, TraverseOrder},
 };
 
@@ -32,43 +32,34 @@ use nickel_lang_core::{
 //           build time, and re-parse it at runtime. We will then pretty-print
 //           it *again* at runtime.
 
+/// parses the nickel file at `path` and substitues any manually performs import
+/// resolution, splicing the files imported inline into the AST
 fn inline_imports(path: impl Into<OsString>) -> Result<RichTerm, Box<dyn Error>> {
-    fn helper(
-        path: impl Into<OsString>,
-        cache: &mut Cache,
-        parser: &TermParser,
-    ) -> Result<RichTerm, Box<dyn Error>> {
-        let path = &path.into();
-        let file_id = cache.add_file(path.clone())?;
-        let lexer = Lexer::new(cache.source(file_id));
-        let rt = parser.parse_strict(file_id, lexer)?;
-        rt.traverse::<_, _, Box<dyn Error>>(
-            &|subterm: RichTerm, cache| {
-                match_sharedterm! { subterm.term, with {
-                    Term::Import(p) => {
-                        let mut pb: PathBuf = path.into();
-                        pb.set_file_name(p);
-                        helper(pb, cache, parser)
-                    }
-                } else {
-                    Ok(subterm)
-                }}
-            },
-            cache,
-            TraverseOrder::BottomUp,
-        )
-    }
-
-    let mut cache = Cache::new(ErrorTolerance::Strict);
-    let parser = TermParser::new();
-    helper(path, &mut cache, &parser)
+    let path = &path.into();
+    let mut program: Program<CacheImpl> = Program::new_from_file(path.clone(), std::io::stderr())?;
+    let rt = program.parse().map_err(|e| program.report_as_str(e))?;
+    rt.traverse::<_, _, Box<dyn Error>>(
+        &|subterm: RichTerm, _| {
+            match_sharedterm! { subterm.term, with {
+                Term::Import(import_path_rel) => {
+                    let mut import_path_abs: PathBuf = path.into();
+                    import_path_abs.set_file_name(import_path_rel);
+                    inline_imports(import_path_abs)
+                }
+            } else {
+                Ok(subterm)
+            }}
+        },
+        &mut (),
+        TraverseOrder::BottomUp,
+    )
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let lib = inline_imports("./lib/predicates.ncl")?;
 
-    let out_dir = env::var_os("OUT_DIR")?;
+    let out_dir = env::var_os("OUT_DIR").ok_or("environment variable OUT_DIR doesn't exist")?;
     let gen_lib_path = Path::new(&out_dir).join("predicates.ncl");
-    fs::write(&gen_lib_path, format!("{lib}"))?;
+    fs::write(gen_lib_path, format!("{lib}"))?;
     Ok(())
 }
