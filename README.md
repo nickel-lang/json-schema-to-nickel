@@ -5,35 +5,31 @@ A tool to convert [JSON schema](https://json-schema.org) into [Nickel](https://w
 ## How to use it?
 
 `json-schema-to-nickel` is a standalone binary that reads a JSON schema file and
-outputs a Nickel contract. You can build it from source using `cargo` by running
+outputs a Nickel contract. You can run it from source using `cargo` by running
 
 ```shell
-cargo build --release
+cargo run -- <path to your schema.json>
 ```
 
-in a checkout of this repository. The resulting binary will be `./target/
-release/json-schema-to-nickel` and can also be run using `cargo run --release`.
-Alternatively, you can build it using `nix` by running
+in a checkout of this repository. Alternatively, you can use `nix`:
 
 ```shell
-nix build github:nickel-lang/json-schema-to-nickel
+nix run github:nickel-lang/json-schema-to-nickel -- <path to your schema.json>
 ```
 
-anywhere. This will retrieve the latest revision from GitHub, build `json-
-schema-to-nickel` and produce a symlink `./result/bin/json-schema-to-nickel` in
-the current directory.
+anywhere. This will retrieve the latest revision from GitHub, build
+`json-schema-to-nickel` and run the resulting binary on your JSON schema.
 
-Once you have a binary, to convert a JSON schema in `schema.json` into a Nickel
-contract, use
-
-```shell
-json-schema-to-nickel schema.json > contract.ncl
-```
-
-`json-schema-to-nickel` will print the generated Nickel contract on standard
+Either invocation will print the generated Nickel contract to standard
 output. It can get rather large, so it's recommended to redirect the output into
-a file as illustrated above. Once you have a Nickel contract in `contract.ncl`
-you can check a Nickel configuration against by simply importing the file by its
+a file, for example by using
+
+```shell
+cargo run -- schema.json > contract.ncl
+```
+
+Once you have a output of `json-schema-to-nickel` in a file, say `contract.ncl`,
+you can check a Nickel configuration against it by importing the file by its
 path, e.g.
 
 ```nickel
