@@ -61,6 +61,15 @@ two functionalities.
   dialect that [schemars][schemars] does.
 - The `format` keyword of JSON schema is currently ignored, [#24][i24]
 - Error reporting in contracts converted from predicates can be a bit hit or miss, [#27][i27]
+- The generated contracts might be more eager than expected. This chiefly
+  depends on whether our heuristics are able to produce a proper Nickel record
+  contract or not. If they do, the top level contract will be as lazy as
+  expected in Nickel, otherwise the result will just be a validation function.
+  Similar reasoning applies to each field of a record contract if one can be
+  generated.
+- Related to the last point, if our contract heuristics produce a proper record
+  contract, completion using the Nickel language server will work as expected.
+  Otherwise, the generated contract will be opaque to the language server.
 
 [i24]: https://github.com/nickel-lang/json-schema-to-nickel/issues/24
 [i27]: https://github.com/nickel-lang/json-schema-to-nickel/issues/27
