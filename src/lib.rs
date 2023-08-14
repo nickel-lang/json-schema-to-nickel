@@ -26,7 +26,11 @@ pub(crate) mod utils;
 
 use contracts::{contract_from_predicate, Contract};
 use definitions::Environment;
-use nickel_lang_core::term::{RichTerm, Term};
+use nickel_lang_core::{
+    cache::{Cache, ErrorTolerance},
+    parser::{grammar::TermParser, lexer::Lexer, ErrorTolerantParser},
+    term::{RichTerm, Term},
+};
 use predicates::Predicate;
 use schemars::schema::RootSchema;
 
@@ -46,9 +50,16 @@ pub fn root_schema(root: &RootSchema) -> RichTerm {
 /// Wrap a Nickel contract making use of the predicates support library and
 /// recursive definitions recorded in `env`.
 pub fn wrap_contract(env: Environment, contract: Contract) -> RichTerm {
+    let lib_ncl = include_bytes!(concat!(env!("OUT_DIR"), "/predicates.ncl"));
+    let lib_ncl = String::from_utf8_lossy(lib_ncl);
+    let mut cache = Cache::new(ErrorTolerance::Strict);
+    let parser = TermParser::new();
+    let file_id = cache.add_string("predicates.ncl", lib_ncl.to_string());
+    let lexer = Lexer::new(cache.source(file_id));
+    let lib_rt = parser.parse_strict(file_id, lexer).unwrap();
     Term::Let(
         "predicates".into(),
-        Term::Import("./lib/predicates.ncl".into()).into(),
+        lib_rt,
         env.wrap(contract.into()),
         Default::default(),
     )
