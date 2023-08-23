@@ -104,7 +104,7 @@
       if !std.is_array x then
         { success = true, error = "" }
       else if std.array.length (x | Array Dyn) > n then
-        { success = false, error = "array is longer than %{std.string.from_number n}" }
+        { success = false, error = "array is longer than %{std.string.from_number n} items" }
       else
         { success = true, error = "" },
 
@@ -118,7 +118,7 @@
       if !std.is_array x then
         { success = true, error = "" }
       else if std.array.length (x | Array Dyn) < n then
-        { success = false, error = "array is longer than %{std.string.from_number n}" }
+        { success = false, error = "array is shorter than %{std.string.from_number n} items" }
       else
         { success = true, error = "" },
 
