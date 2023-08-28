@@ -54,10 +54,5 @@ fn translation_typecheck_test(
             .unwrap()
             .eval_full();
 
-    assert_eq!(
-        test_case.is_valid,
-        matches!(actual, Ok(_)),
-        "got: {:#?}",
-        actual
-    );
+    assert_eq!(test_case.is_valid, actual.is_ok(), "got: {:#?}", actual);
 }
