@@ -248,14 +248,14 @@ impl TryFrom<&SchemaObject> for Contract {
                 let enum_rows: EnumRows =
                     values
                         .iter()
-                        .fold(Ok(EnumRows(EnumRowsF::Empty)), |acc, value| {
+                        .try_fold(EnumRows(EnumRowsF::Empty), |acc, value| {
                             let id = match value {
                                 Value::String(s) => s.into(),
                                 _ => return Err(()),
                             };
                             Ok(EnumRows(EnumRowsF::Extend {
                                 row: id,
-                                tail: Box::new(acc?),
+                                tail: Box::new(acc),
                             }))
                         })?;
                 Ok(Contract(vec![
