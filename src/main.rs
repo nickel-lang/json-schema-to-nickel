@@ -2,7 +2,6 @@ use std::{
     error::Error,
     fs::File,
     io::{stdout, Read},
-    path::PathBuf,
 };
 
 use clap::Parser;
@@ -14,17 +13,18 @@ use terminal_size::{terminal_size, Width};
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Path to a JSON schema file, or "-" to read the schema file from stdin.
-    schema: String,
+    /// Path to a JSON schema file. If omitted, the schema file will be read from stdin.
+    schema: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    let f: Box<dyn Read> = if args.schema == "-" {
-        Box::new(std::io::stdin())
+    let f: Box<dyn Read> = if let Some(path) = args.schema {
+        Box::new(File::open(path)?)
     } else {
-        Box::new(File::open(PathBuf::from(args.schema))?)
+        Box::new(std::io::stdin())
     };
+
     let schema: RootSchema = serde_json::from_reader(f)?;
 
     let size = terminal_size()
