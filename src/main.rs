@@ -1,4 +1,8 @@
-use std::{error::Error, fs::File, io::stdout, path::PathBuf};
+use std::{
+    error::Error,
+    fs::File,
+    io::{stdout, Read},
+};
 
 use clap::Parser;
 use json_schema_to_nickel::root_schema;
@@ -9,11 +13,18 @@ use terminal_size::{terminal_size, Width};
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    schema: String,
+    /// Path to a JSON schema file. If omitted, the schema file will be read from stdin.
+    schema: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let f = File::open(PathBuf::from(Args::parse().schema))?;
+    let args = Args::parse();
+    let f: Box<dyn Read> = if let Some(path) = args.schema {
+        Box::new(File::open(path)?)
+    } else {
+        Box::new(std::io::stdin())
+    };
+
     let schema: RootSchema = serde_json::from_reader(f)?;
 
     let size = terminal_size()
