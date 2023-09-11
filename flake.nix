@@ -12,12 +12,15 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    nickel = {
-      url = "github:tweag/nickel";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    nickel.url = "github:tweag/nickel";
 
     topiary.url = "github:tweag/topiary";
+  };
+
+  # use cached nickel
+  nixConfig = {
+    extra-substituters = [ "https://tweag-nickel.cachix.org" ];
+    extra-trusted-public-keys = [ "tweag-nickel.cachix.org-1:GIthuiK4LRgnW64ALYEoioVUQBWs0jexyoYVeLDBwRA=" ];
   };
 
   outputs = inputs:
