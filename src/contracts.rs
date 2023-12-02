@@ -37,7 +37,9 @@ use nickel_lang_core::{
     },
     typ::{EnumRows, EnumRowsF, RecordRows, Type, TypeF},
 };
-use schemars::schema::{InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec};
+use schemars::schema::{
+    ArrayValidation, InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec,
+};
 use serde_json::Value;
 
 use crate::{definitions, predicates::Predicate, utils::static_access};
@@ -145,6 +147,34 @@ impl TryFrom<&ObjectValidation> for Contract {
                 is_open_record(additional_properties.as_deref()),
             ))),
             _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<&ArrayValidation> for Contract {
+    type Error = ();
+
+    fn try_from(val: &ArrayValidation) -> Result<Self, Self::Error> {
+        if let ArrayValidation {
+            items: Some(SingleOrVec::Single(s)),
+            additional_items: None,
+            max_items: None,
+            min_items: None,
+            unique_items: None,
+            contains: None,
+        } = val
+        {
+            let elt = Contract::try_from(s.as_ref())
+                .unwrap_or_else(|_| contract_from_predicate(Predicate::from(s.as_ref())));
+            if let [elt] = elt.0.as_slice() {
+                Ok(Contract::from(TypeF::Array(Box::new(
+                    TypeF::Flat(elt.clone()).into(),
+                ))))
+            } else {
+                Err(())
+            }
+        } else {
+            Err(())
         }
     }
 }
@@ -263,6 +293,20 @@ impl TryFrom<&SchemaObject> for Contract {
                     Term::Type(TypeF::Enum(enum_rows).into()).into(),
                 ]))
             }
+            SchemaObject {
+                metadata: _,
+                instance_type: Some(SingleOrVec::Single(instance_type)),
+                format: None,
+                enum_values: None,
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: Some(av),
+                object: None,
+                reference: None,
+                extensions: _,
+            } if **instance_type == InstanceType::Array => av.as_ref().try_into(),
             _ => Err(()),
         }
     }
