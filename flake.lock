@@ -39,11 +39,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1702749801,
-        "narHash": "sha256-frIhfv0h4RAobzQ/vp7C7a2bEbz2gcZc2qVSc2CElxw=",
+        "lastModified": 1703089493,
+        "narHash": "sha256-WUjYqUP/Lhhop9+aiHVFREgElunx1AHEWxqMT8ePfzo=",
         "owner": "ipetkov",
         "repo": "crane",
-        "rev": "3330c0de31e8729bb5d01820e59ceb1640e128dc",
+        "rev": "2a5136f14a9ac93d9d370d64a36026c5de3ae8a4",
         "type": "github"
       },
       "original": {
@@ -130,11 +130,11 @@
         "rust-analyzer-src": "rust-analyzer-src"
       },
       "locked": {
-        "lastModified": 1702707666,
-        "narHash": "sha256-I8qF/ZdzXcgkKz+BcgQKFgTlcQmAM5wkoYaLJR+N17U=",
+        "lastModified": 1703312464,
+        "narHash": "sha256-eGFvUZCK5F56+A1NmJ1kqAMBlajsr33lgOmSwlpvFec=",
         "owner": "nix-community",
         "repo": "fenix",
-        "rev": "8001e62f21df863304287c63f01fcc0c24c91816",
+        "rev": "7c6af11a6d9d4929fcaedd94eec9007795e52778",
         "type": "github"
       },
       "original": {
@@ -382,11 +382,11 @@
         "topiary": "topiary"
       },
       "locked": {
-        "lastModified": 1702645152,
-        "narHash": "sha256-Dk/4GUndxmq2a3450CPRsFe3u5jmw4KQzKIcWsrzgoM=",
+        "lastModified": 1703238829,
+        "narHash": "sha256-cE14jZBw3mZYk9XP6CgBdCYir+K+PYqFY55GCuC06HE=",
         "owner": "tweag",
         "repo": "nickel",
-        "rev": "e1113af36842a1012494342a95f76a7973495961",
+        "rev": "29f4464aa1d94b0c5db94754860b632a54c81414",
         "type": "github"
       },
       "original": {
@@ -527,11 +527,11 @@
     },
     "nixpkgs_4": {
       "locked": {
-        "lastModified": 1702539185,
-        "narHash": "sha256-KnIRG5NMdLIpEkZTnN5zovNYc0hhXjAgv6pfd5Z4c7U=",
+        "lastModified": 1703134684,
+        "narHash": "sha256-SQmng1EnBFLzS7WSRyPM9HgmZP2kLJcPAz+Ug/nug6o=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "aa9d4729cbc99dabacb50e3994dcefb3ea0f7447",
+        "rev": "d6863cbcbbb80e71cecfc03356db1cda38919523",
         "type": "github"
       },
       "original": {
@@ -612,11 +612,11 @@
     "rust-analyzer-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1702654920,
-        "narHash": "sha256-Kvym2mv/f4duzYJLL+HBOTHkr8GbqCc3bDtuBN9TSvQ=",
+        "lastModified": 1703247226,
+        "narHash": "sha256-ZXWDkDwD2QXWrMe+n7H5fhAfqs0entHszLib+iEMN58=",
         "owner": "rust-lang",
         "repo": "rust-analyzer",
-        "rev": "21b06c1beb9bb59369ffd652f5d617bcf6952e05",
+        "rev": "afbb8f31ff0fb66cb7f6ae89606727d01c0a8153",
         "type": "github"
       },
       "original": {
@@ -886,11 +886,11 @@
         "rust-overlay": "rust-overlay_5"
       },
       "locked": {
-        "lastModified": 1701365769,
-        "narHash": "sha256-LCiZALgovsY+J6+9QkQR1QG4qPU5gtpFbHtzB3FjskM=",
+        "lastModified": 1703154499,
+        "narHash": "sha256-bFsF3hJk2JQWU7jCPbV9fSLQMCdNyn2vXIqvA7L9YSA=",
         "owner": "tweag",
         "repo": "topiary",
-        "rev": "8cc9aa40d99c89b448190bb1693777128fdcd6c0",
+        "rev": "4d48c236a1fd25824384241b42239ffff8cb3a04",
         "type": "github"
       },
       "original": {
