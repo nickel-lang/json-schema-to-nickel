@@ -18,6 +18,7 @@ use nickel_lang_core::{
         record::{Field, FieldMetadata, RecordData},
         LetAttrs, RichTerm, Term,
     },
+    typ::TypeF,
 };
 use schemars::schema::Schema;
 
@@ -59,7 +60,17 @@ pub fn reference(reference: &str) -> Access {
     if let Some(remainder) = reference.strip_prefix("#/definitions/") {
         access(remainder)
     } else {
-        unimplemented!()
+        eprintln!(
+            "
+            Warning: skipping reference {reference} (replaced by an always succeeding `Dyn` \
+            contract). The current version of `json-schema-to-nickel` doesn't support external \
+            references"
+        );
+
+        Access {
+            contract: Term::Type(TypeF::Dyn.into()).into(),
+            predicate: static_access("definitions", ["predicate", "always"]),
+        }
     }
 }
 
