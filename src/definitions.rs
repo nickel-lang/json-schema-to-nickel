@@ -69,7 +69,7 @@ pub fn reference(reference: &str) -> Access {
 
         Access {
             contract: Term::Type(TypeF::Dyn.into()).into(),
-            predicate: static_access("definitions", ["predicate", "always"]),
+            predicate: static_access("predicates", ["always"]),
         }
     }
 }
