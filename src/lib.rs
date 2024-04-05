@@ -34,11 +34,32 @@ use nickel_lang_core::{
 use predicates::Predicate;
 use schemars::schema::RootSchema;
 
+/// The name of the special variable introduced by json-schema-to-nickel in the final contract
+/// which holds the predicates and the contracts corresponding to the definitions of the schema.
+/// The name is long and specific on purpose as it could clash with existing variable in the
+/// schema.
+///
+/// This Nickel variable is expected to have the type
+/// `{_ : {predicate: _, contract: _}}` where field names correspond to the top-level
+/// definitions in the schema.
+pub const DEFINITIONS_MANGLED : &str = "___js2n_nickel_defs";
+
+/// Same as [DEFINITIONS_MANGLED] but for the predicates corresponding to properties of the schema.
+///
+/// This Nickel variable is expected to have the type `{_ : Dyn -> Bool}` where predicates are
+/// directly stored without further indirection, as opposed to [DEFINITIONS_MANGLED]. Indeed, we
+/// don't need the contract part, which can be accessed directly from within the final schema.
+///
+/// Properties can be nested, so we might need to store both a predicate for `foo` and for
+/// `foo.bar.baz`. To make this work, we store the predicates in a flat dictionary, where the keys
+/// are complete paths using `/` as a separator (to avoid confusion with Nickel field path).
+pub const PROPS_PREDICATES_MANGLED : &str = "___js2n_nickel_prop_preds";
+
 /// Convert a [`RootSchema`] into a Nickel contract. If the JSON schema is
 /// representable as a lazy record contract, this conversion is preferred.
 /// Otherwise, we fall back to generating a predicate.
 pub fn root_schema(root: &RootSchema) -> RichTerm {
-    let env = Environment::from(&root.definitions);
+    let env = Environment::new(todo!(), todo!());
     if let Ok(contract) = Contract::try_from(&root.schema) {
         wrap_contract(env, contract)
     } else {
@@ -52,11 +73,13 @@ pub fn root_schema(root: &RootSchema) -> RichTerm {
 pub fn wrap_contract(env: Environment, contract: Contract) -> RichTerm {
     let lib_ncl = include_bytes!(concat!(env!("OUT_DIR"), "/predicates.ncl"));
     let lib_ncl = String::from_utf8_lossy(lib_ncl);
+
     let mut cache = Cache::new(ErrorTolerance::Strict);
     let parser = TermParser::new();
     let file_id = cache.add_string("predicates.ncl", lib_ncl.to_string());
     let lexer = Lexer::new(cache.source(file_id));
     let lib_rt = parser.parse_strict(file_id, lexer).unwrap();
+
     Term::Let(
         "predicates".into(),
         lib_rt,
