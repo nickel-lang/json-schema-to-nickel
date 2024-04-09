@@ -1,3 +1,12 @@
+//! # Nickel eager contract generation for JSON schemas
+//!
+//! [crate::contracts] implements a translation from JSON schemas to Nickel which tries to preserve
+//! lazyness. This isn't always possible. This module provides a fallback converion that is based
+//! on boolean predicates instead, and which can handle general JSON schemas.
+//!
+//! The drawback is that the resulting Nickel contracts are eager (they don't preserve lazyness)
+//! and are less LSP-friendly.
+use crate::definitions::RefUsage;
 use std::{collections::BTreeMap, iter};
 
 use nickel_lang_core::{
@@ -11,10 +20,23 @@ use schemars::schema::{
 };
 use serde_json::Value;
 
-use crate::{definitions, utils::static_access};
+use crate::{
+    definitions::{self, RefsUsage},
+    utils::static_access,
+};
 
 #[derive(Clone)]
 pub struct Predicate(RichTerm);
+
+/// [Convert] is essentially like `From` but passes additional state around used for effective
+/// reference resolution. Infallible version of [crate::contracts::TryConvert].
+pub trait Convert<F> {
+    /// Convert a root JSON schema to a predicate. [Self::convert] carries additional state related
+    /// to reference resolution.
+    fn convert(from: &F, refs_usage: &mut RefsUsage) -> Self
+    where
+        Self: Sized;
+}
 
 impl From<RichTerm> for Predicate {
     fn from(rt: RichTerm) -> Self {
@@ -51,7 +73,6 @@ impl From<Vec<Predicate>> for Predicates {
 
 impl IntoIterator for Predicates {
     type Item = <Vec<Predicate> as IntoIterator>::Item;
-
     type IntoIter = <Vec<Predicate> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -59,8 +80,8 @@ impl IntoIterator for Predicates {
     }
 }
 
-fn or_always(s: Option<&Schema>) -> Predicate {
-    s.map(Predicate::from)
+fn or_always(s: Option<&Schema>, refs_usage: &mut RefsUsage) -> Predicate {
+    s.map(|s| Predicate::convert(s, refs_usage))
         .unwrap_or(Predicate::from(static_access("predicates", ["always"])))
 }
 
@@ -167,8 +188,8 @@ fn mk_any_of(preds: impl IntoIterator<Item = Predicate>) -> Predicate {
     }
 }
 
-impl From<&SubschemaValidation> for Predicates {
-    fn from(
+impl Convert<SubschemaValidation> for Predicates {
+    fn convert(
         SubschemaValidation {
             all_of,
             any_of,
@@ -178,15 +199,28 @@ impl From<&SubschemaValidation> for Predicates {
             then_schema,
             else_schema,
         }: &SubschemaValidation,
+        refs_usage: &mut RefsUsage,
     ) -> Self {
         let all_of = all_of
             .as_deref()
-            .map(|schemas| mk_all_of(schemas.iter().map(Predicate::from)))
+            .map(|schemas| {
+                mk_all_of(
+                    schemas
+                        .iter()
+                        .map(|res| Predicate::convert(res, refs_usage)),
+                )
+            })
             .into_iter();
 
         let any_of = any_of
             .as_deref()
-            .map(|schemas| mk_any_of(schemas.iter().map(Predicate::from)))
+            .map(|schemas| {
+                mk_any_of(
+                    schemas
+                        .iter()
+                        .map(|res| Predicate::convert(res, refs_usage)),
+                )
+            })
             .into_iter();
 
         let one_of = one_of
@@ -195,7 +229,12 @@ impl From<&SubschemaValidation> for Predicates {
                 mk_app!(
                     static_access("predicates", ["oneOf"]),
                     Term::Array(
-                        Array::new(schemas.iter().map(|s| Predicate::from(s).into()).collect()),
+                        Array::new(
+                            schemas
+                                .iter()
+                                .map(|s| Predicate::convert(s, refs_usage).into())
+                                .collect()
+                        ),
                         Default::default()
                     )
                 )
@@ -205,7 +244,13 @@ impl From<&SubschemaValidation> for Predicates {
 
         let not = not
             .as_deref()
-            .map(|s| mk_app!(static_access("predicates", ["not"]), Predicate::from(s)).into())
+            .map(|s| {
+                mk_app!(
+                    static_access("predicates", ["not"]),
+                    Predicate::convert(s, refs_usage)
+                )
+                .into()
+            })
             .into_iter();
 
         let ite = if_schema
@@ -213,9 +258,9 @@ impl From<&SubschemaValidation> for Predicates {
             .map(move |if_schema| {
                 mk_app!(
                     static_access("predicates", ["ifThenElse"]),
-                    Predicate::from(if_schema),
-                    or_always(then_schema.as_deref()),
-                    or_always(else_schema.as_deref())
+                    Predicate::convert(if_schema, refs_usage),
+                    or_always(then_schema.as_deref(), refs_usage),
+                    or_always(else_schema.as_deref(), refs_usage)
                 )
                 .into()
             })
@@ -316,8 +361,8 @@ impl From<&StringValidation> for Predicates {
     }
 }
 
-impl From<&ArrayValidation> for Predicates {
-    fn from(
+impl Convert<ArrayValidation> for Predicates {
+    fn convert(
         ArrayValidation {
             items,
             additional_items,
@@ -326,12 +371,13 @@ impl From<&ArrayValidation> for Predicates {
             unique_items,
             contains,
         }: &ArrayValidation,
+        refs_usage: &mut RefsUsage,
     ) -> Self {
         let items = match items {
             None => vec![],
             Some(SingleOrVec::Single(s)) => vec![mk_app!(
                 static_access("predicates", ["arrays", "arrayOf"]),
-                Predicate::from(s.as_ref())
+                Predicate::convert(s.as_ref(), refs_usage)
             )
             .into()],
             Some(SingleOrVec::Vec(schemas)) => {
@@ -339,7 +385,12 @@ impl From<&ArrayValidation> for Predicates {
                 [mk_app!(
                     static_access("predicates", ["arrays", "items"]),
                     Term::Array(
-                        Array::new(schemas.iter().map(|x| Predicate::from(x).into()).collect()),
+                        Array::new(
+                            schemas
+                                .iter()
+                                .map(|x| Predicate::convert(x, refs_usage).into())
+                                .collect()
+                        ),
                         Default::default()
                     )
                 )
@@ -348,7 +399,7 @@ impl From<&ArrayValidation> for Predicates {
                 .chain(additional_items.as_deref().map(|s| {
                     mk_app!(
                         static_access("predicates", ["arrays", "additionalItems"]),
-                        Predicate::from(s),
+                        Predicate::convert(s, refs_usage),
                         Term::Num(len.into())
                     )
                     .into()
@@ -389,7 +440,7 @@ impl From<&ArrayValidation> for Predicates {
             .map(|s| {
                 mk_app!(
                     static_access("predicates", ["arrays", "contains"]),
-                    Predicate::from(s)
+                    Predicate::convert(s, refs_usage)
                 )
                 .into()
             })
@@ -406,8 +457,8 @@ impl From<&ArrayValidation> for Predicates {
     }
 }
 
-impl From<&ObjectValidation> for Predicates {
-    fn from(
+impl Convert<ObjectValidation> for Predicates {
+    fn convert(
         ObjectValidation {
             max_properties,
             min_properties,
@@ -417,6 +468,7 @@ impl From<&ObjectValidation> for Predicates {
             additional_properties,
             property_names,
         }: &ObjectValidation,
+        refs_usage: &mut RefsUsage,
     ) -> Self {
         let max_properties = max_properties
             .map(|n| {
@@ -443,7 +495,7 @@ impl From<&ObjectValidation> for Predicates {
             .map(|s| {
                 mk_app!(
                     static_access("predicates", ["records", "propertyNames"]),
-                    Predicate::from(s)
+                    Predicate::convert(s, refs_usage)
                 )
                 .into()
             })
@@ -472,20 +524,20 @@ impl From<&ObjectValidation> for Predicates {
             Term::Record(RecordData::with_field_values(
                 properties
                     .iter()
-                    .map(|(k, v)| (k.into(), Predicate::from(v).into()))
+                    .map(|(k, v)| (k.into(), Predicate::convert(v, refs_usage).into()))
                     .collect()
             )),
             Term::Record(RecordData::with_field_values(
                 pattern_properties
                     .iter()
-                    .map(|(k, v)| (k.into(), Predicate::from(v).into()))
+                    .map(|(k, v)| (k.into(), Predicate::convert(v, refs_usage).into()))
                     .collect()
             )),
             Term::Bool(!matches!(
                 additional_properties.as_deref(),
                 Some(Schema::Bool(false))
             )),
-            or_always(additional_properties.as_deref())
+            or_always(additional_properties.as_deref(), refs_usage)
         )
         .into()]
         .into_iter();
@@ -501,7 +553,10 @@ impl From<&ObjectValidation> for Predicates {
     }
 }
 
-fn dependencies(extensions: &BTreeMap<String, Value>) -> impl IntoIterator<Item = Predicate> {
+fn dependencies(
+    extensions: &BTreeMap<String, Value>,
+    refs_usage: &mut RefsUsage,
+) -> impl IntoIterator<Item = Predicate> {
     extensions
         .get("dependencies")
         .and_then(|v| v.as_object())
@@ -524,7 +579,7 @@ fn dependencies(extensions: &BTreeMap<String, Value>) -> impl IntoIterator<Item 
                                 .into()
                             } else {
                                 serde_json::from_value::<Schema>(value.clone())
-                                    .map(|s| Predicate::from(&s).into())
+                                    .map(|s| Predicate::convert(&s, refs_usage).into())
                                     .unwrap()
                             }
                         ))
@@ -536,8 +591,8 @@ fn dependencies(extensions: &BTreeMap<String, Value>) -> impl IntoIterator<Item 
         .into_iter()
 }
 
-impl From<&SchemaObject> for Predicate {
-    fn from(
+impl Convert<SchemaObject> for Predicate {
+    fn convert(
         SchemaObject {
             metadata: _,
             instance_type,
@@ -552,6 +607,7 @@ impl From<&SchemaObject> for Predicate {
             reference,
             extensions,
         }: &SchemaObject,
+        refs_usage: &mut RefsUsage,
     ) -> Self {
         mk_all_of(
             instance_type
@@ -559,30 +615,40 @@ impl From<&SchemaObject> for Predicate {
                 .map(Predicate::from)
                 .chain(enum_values.as_deref().map(Predicate::from))
                 .chain(const_value.as_ref().map(Predicate::from))
-                .chain(subschemas.iter().flat_map(|x| Predicates::from(x.as_ref())))
+                .chain(
+                    subschemas
+                        .iter()
+                        .flat_map(|x| Predicates::convert(x.as_ref(), refs_usage)),
+                )
                 .chain(number.iter().flat_map(|x| Predicates::from(x.as_ref())))
                 .chain(string.iter().flat_map(|x| Predicates::from(x.as_ref())))
-                .chain(array.iter().flat_map(|x| Predicates::from(x.as_ref())))
-                .chain(object.iter().flat_map(|x| Predicates::from(x.as_ref())))
                 .chain(
-                    reference
-                        .as_deref()
-                        .map(|r| Predicate::from(definitions::reference(r).predicate)),
+                    array
+                        .iter()
+                        .flat_map(|x| Predicates::convert(x.as_ref(), refs_usage)),
                 )
+                .chain(
+                    object
+                        .iter()
+                        .flat_map(|x| Predicates::convert(x.as_ref(), refs_usage)),
+                )
+                .chain(reference.as_deref().map(|r| {
+                    Predicate::from(definitions::resolve_ref(r, refs_usage, RefUsage::Predicate))
+                }))
                 // schema.rs parses dependencies incorrectly. It should really be
                 // part of object validation (object_predicates()) but it gets put
                 // in extensions instead.
-                .chain(dependencies(extensions)),
+                .chain(dependencies(extensions, refs_usage)),
         )
     }
 }
 
-impl From<&Schema> for Predicate {
-    fn from(value: &Schema) -> Self {
+impl Convert<Schema> for Predicate {
+    fn convert(value: &Schema, refs_usage: &mut RefsUsage) -> Self {
         match value {
             Schema::Bool(true) => static_access("predicates", ["always"]).into(),
             Schema::Bool(false) => static_access("predicates", ["never"]).into(),
-            Schema::Object(o) => o.into(),
+            Schema::Object(o) => Predicate::convert(o, refs_usage),
         }
     }
 }

@@ -151,8 +151,10 @@ pub struct ConvertedSchema {
     contract: Contract,
 }
 
-/// The state used to record which properties and definitions are actually used, and how.
-pub struct RefsState {
+/// State recording which properties and definitions are actually used and how (as predicates or as
+/// contracts).
+#[derive(Clone, Default)]
+pub struct RefsUsage {
     /// The definitions referenced as predicates somewhere in the schema.
     pub defs_predicates: HashSet<String>,
     /// The definitions referenced as contracts somewhere in the schema.
@@ -162,6 +164,13 @@ pub struct RefsState {
     /// We don't need to keep track of the contracts, as they will inconditionnally be constituents
     /// of the final schema.
     pub props_predicates: HashSet<Vec<String>>,
+}
+
+impl RefsUsage {
+    /// The empty state
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 /// An environment of top level schema definitions and nested properties and their conversions into
@@ -198,7 +207,7 @@ pub struct Environment {
 ///   how. `resolve_ref` will update the state accordingly
 /// - `usage`: the context in which the reference is used. Some contexts requires a predicate,
 ///   while other can do with a contract.
-pub fn resolve_ref(reference: &str, state: &mut RefsState, usage: RefUsage) -> RichTerm {
+pub fn resolve_ref(reference: &str, state: &mut RefsUsage, usage: RefUsage) -> RichTerm {
     let unsupported_reference = || -> RichTerm {
         eprintln!(
             "
@@ -259,7 +268,7 @@ impl Environment {
 
     /// Create an environment from the top-level JSON schema and a ref state indicating which
     /// properties and definitions actually need to be considered.
-    pub fn new(root_schema: Schema, state: &RefsState) -> Self {
+    pub fn new(root_schema: Schema, state: &RefsUsage) -> Self {
         // FIXME: Definitions can have their own definitions. Does this handle that
         //        correctly? Does schema.rs even handle it correctly?
         todo!()
