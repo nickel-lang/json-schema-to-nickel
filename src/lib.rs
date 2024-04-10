@@ -24,7 +24,7 @@ pub mod definitions;
 pub mod predicates;
 pub(crate) mod utils;
 
-use contracts::{contract_from_predicate, Contract};
+use contracts::{AsCtrThruPred, Contract, TryAsContract};
 use definitions::Environment;
 use nickel_lang_core::{
     cache::{Cache, ErrorTolerance},
@@ -60,10 +60,11 @@ pub const PROPS_PREDICATES_MANGLED: &str = "___js2n_nickel_prop_preds";
 /// Otherwise, we fall back to generating a predicate.
 pub fn root_schema(root: &RootSchema) -> RichTerm {
     let env = Environment::new(todo!(), todo!());
-    if let Ok(contract) = Contract::try_from(&root.schema) {
+
+    if let Some((contract, _refs_usage)) = Contract::from_root_schema(root) {
         wrap_contract(env, contract)
     } else {
-        let predicate = Predicate::from(&root.schema);
+        let (predicate, _refs_usage) = Predicate::from(&root.schema);
         wrap_predicate(env, predicate)
     }
 }

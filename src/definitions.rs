@@ -30,7 +30,7 @@
 //! At the end, we can elaborate the required special values like `___nickel_defs` and only include
 //! the actually used in the final contract, to avoid bloating the result.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use nickel_lang_core::{
     identifier::Ident,
@@ -43,7 +43,7 @@ use nickel_lang_core::{
 use schemars::schema::Schema;
 
 use crate::{
-    contracts::{contract_from_predicate, Contract, Documentation},
+    contracts::{Contract, Documentation},
     predicates::Predicate,
     utils::{decode_json_ptr_part, static_access},
     DEFINITIONS_MANGLED, PROPS_PREDICATES_MANGLED,

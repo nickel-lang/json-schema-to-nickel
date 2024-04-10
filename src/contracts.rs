@@ -45,7 +45,7 @@ use serde_json::Value;
 
 use crate::{
     definitions::{self, RefsUsage},
-    predicates::{Convert, Predicate},
+    predicates::{AsPredicate, Predicate},
     utils::static_access,
 };
 
@@ -63,61 +63,62 @@ fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
 #[derive(Clone)]
 pub struct Contract(Vec<RichTerm>);
 
-// The whole conversion starts from a root schema with the inial empty state: thus we don't
-// implement `TryConvert<RootSchema>` but `TryFrom<RootSchema>` directly.
-impl TryFrom<RootSchema> for Contract {
-    type Error = ();
+impl Contract {
+    /// Convert a root JSON schema to a contract. Returns `None` if the schema couldn't be
+    /// converted to a (lazy) contract, and thus requires to go through a predicate.
+    /// Upon success, returns the contract and the references used in the schema.
+    pub fn from_root_schema(value: RootSchema) -> Option<(Self, RefsUsage)> {
+        let mut refs_usage = RefsUsage::new();
 
-    fn try_from(value: RootSchema) -> Result<Self, Self::Error> {
-        Contract::try_convert(&value.schema, &mut RefsUsage::new()).ok_or(())
+        value
+            .schema
+            .try_as_contract(&mut refs_usage)
+            .map(|ctr| (ctr, refs_usage))
     }
 }
 
-/// [TryConvert] is essentially like `TryFrom` but passes additional state around used for
+/// [TryAsContract] is essentially like `TryInto<Contract>` but passes additional state around used for
 /// effective reference resolution.
-pub trait TryConvert<F> {
-    /// Try to convert a root JSON schema to a contract. Returns `None` if the schema couldn't be
-    /// converted to a lazy contract, and thus requires to go through a predicate.
+pub trait TryAsContract {
+    /// Try to convert a JSON schema component `Self` to a contract. Returns `None` if the
+    /// component couldn't be converted to a lazy contract, and thus requires to go through a
+    /// predicate.
     ///
-    /// [Self::try_convert] carries additional state related to reference resolution.
-    fn try_convert(from: &F, refs_usage: &mut RefsUsage) -> Option<Self>
-    where
-        Self: Sized;
+    /// `try_convert` will record the references used during the conversion through the `refs_usage` parameter.
+    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract>;
 }
 
-pub trait ConvertThruPred<F> {
+pub trait AsCtrThruPred {
     /// Convert a JSON schema to a contract by first converting it to a predicate, and then use
-    /// json-schema-to-nickel's `from_predicate` helper. As opposed to [TryConvert::try_convert],
-    /// this conversion can't fail. However, it is less desirable (as it throws lazyness out of the
+    /// json-schema-to-nickel's `from_predicate` helper. As opposed to [TryAscontract::try_as_contract], this
+    /// conversion can't fail. However, it is less desirable (as it throws lazyness out of the
     /// window and is less LSP-friendly for e.g. completion), so we generally try to use
-    /// `TryConvert::try_convert` first.
-    fn convert_thru_pred(from: &F, refs_usage: &mut RefsUsage) -> Self
-    where
-        Self: Sized;
+    /// [TryAscontract::try_as_contract] first.
+    fn as_ctr_thru_pred(&self, refs_usage: &mut RefsUsage) -> Contract;
 }
 
-impl<F> ConvertThruPred<F> for Contract
+impl<T> AsCtrThruPred for T
 where
-    Predicate: Convert<F>,
+    T: AsPredicate,
 {
-    fn convert_thru_pred(from: &F, refs_usage: &mut RefsUsage) -> Self {
-        Contract::from(Predicate::convert(from, refs_usage))
+    fn as_ctr_thru_pred(&self, refs_usage: &mut RefsUsage) -> Contract {
+        Contract::from(self.as_predicate(refs_usage))
     }
 }
 
-impl TryConvert<Schema> for Contract {
-    fn try_convert(from: &Schema, refs_usage: &mut RefsUsage) -> Option<Self> {
-        match from {
+impl TryAsContract for Schema {
+    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract> {
+        match self {
             Schema::Bool(true) => Some(Contract(vec![])),
             Schema::Bool(false) => None,
-            Schema::Object(obj) => Contract::try_convert(obj, refs_usage),
+            Schema::Object(obj) => obj.try_as_contract(refs_usage),
         }
     }
 }
 
-impl TryConvert<SchemaObject> for Contract {
-    fn try_convert(from: &SchemaObject, refs_usage: &mut RefsUsage) -> Option<Self> {
-        match from {
+impl TryAsContract for SchemaObject {
+    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract> {
+        match self {
             // a raw type
             SchemaObject {
                 metadata: _,
@@ -193,7 +194,7 @@ impl TryConvert<SchemaObject> for Contract {
                 reference: None,
                 extensions,
             } if **instance_type == InstanceType::Object && only_ignored_fields(extensions) => {
-                Contract::try_convert(ov.as_ref(), refs_usage)
+                ov.try_as_contract(refs_usage)
             }
             // Enum contract with all strings
             // => | std.enum.TagOrString | [| 'foo, 'bar, 'baz |]
@@ -242,16 +243,14 @@ impl TryConvert<SchemaObject> for Contract {
                 object: None,
                 reference: None,
                 extensions: _,
-            } if **instance_type == InstanceType::Array => {
-                Contract::try_convert(av.as_ref(), refs_usage)
-            }
+            } if **instance_type == InstanceType::Array => av.try_as_contract(refs_usage),
             _ => None,
         }
     }
 }
 
-impl TryConvert<ObjectValidation> for Contract {
-    fn try_convert(from: &ObjectValidation, refs_usage: &mut RefsUsage) -> Option<Self> {
+impl TryAsContract for ObjectValidation {
+    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract> {
         fn is_open_record(additional: Option<&Schema>) -> bool {
             match additional {
                 Some(Schema::Bool(open)) => *open,
@@ -264,7 +263,7 @@ impl TryConvert<ObjectValidation> for Contract {
         // `additional_properties` as a separate pattern
         // SEE: https://github.com/rust-lang/rust/issues/29641
         // SEE: https://github.com/rust-lang/rust/issues/87121
-        match (from, from.additional_properties.as_deref()) {
+        match (self, self.additional_properties.as_deref()) {
             (
                 ObjectValidation {
                     max_properties: None,
@@ -287,8 +286,8 @@ impl TryConvert<ObjectValidation> for Contract {
     }
 }
 
-impl TryConvert<ArrayValidation> for Contract {
-    fn try_convert(from: &ArrayValidation, refs_usage: &mut RefsUsage) -> Option<Self> {
+impl TryAsContract for ArrayValidation {
+    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract> {
         if let ArrayValidation {
             items: Some(SingleOrVec::Single(s)),
             additional_items: None,
@@ -296,10 +295,11 @@ impl TryConvert<ArrayValidation> for Contract {
             min_items: None,
             unique_items: None,
             contains: None,
-        } = from
+        } = self
         {
-            let elt = Contract::try_convert(s.as_ref(), refs_usage)
-                .unwrap_or_else(|| Contract::convert_thru_pred(s.as_ref(), refs_usage));
+            let elt = s
+                .try_as_contract(refs_usage)
+                .unwrap_or_else(|| s.as_ctr_thru_pred(refs_usage));
             if let [elt] = elt.0.as_slice() {
                 Some(Contract::from(TypeF::Array(Box::new(
                     TypeF::Flat(elt.clone()).into(),
@@ -430,8 +430,9 @@ fn generate_record_contract(
     let fields = properties.iter().map(|(name, schema)| {
         // try to convert to a contract, otherwise convert the predicate version
         // to a contract
-        let contract = Contract::try_convert(schema, refs_usage)
-            .unwrap_or_else(|| Contract::convert_thru_pred(schema, refs_usage));
+        let contract = schema
+            .try_as_contract(refs_usage)
+            .unwrap_or_else(|| schema.as_ctr_thru_pred(refs_usage));
         let doc = Documentation::try_from(schema).ok();
         (
             name.into(),
