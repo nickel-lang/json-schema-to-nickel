@@ -30,6 +30,8 @@
 //! At the end, we can elaborate the required special values like `___nickel_defs` and only include
 //! the actually used in the final contract, to avoid bloating the result.
 
+use crate::{contracts::TryAsContract, predicates::AsPredicate};
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use nickel_lang_core::{
@@ -38,15 +40,14 @@ use nickel_lang_core::{
         record::{Field, FieldMetadata, RecordData},
         LetAttrs, RichTerm, Term,
     },
-    typ::TypeF,
 };
-use schemars::schema::Schema;
+use schemars::schema::{RootSchema, Schema, SchemaObject};
 
 use crate::{
     contracts::{Contract, Documentation},
     predicates::Predicate,
     utils::{decode_json_ptr_part, static_access},
-    DEFINITIONS_MANGLED, PROPS_PREDICATES_MANGLED,
+    DEFINITIONS_MANGLED, ENVIRONMENT_MANGLED, PROPS_PREDICATES_MANGLED,
 };
 
 /// Specify if a reference is used in a context which requires a contract or a predicate.
@@ -143,12 +144,69 @@ impl JsonPointer {
     }
 }
 
-/// The nickel predicate and contract generated for a schema.
+/// The conversion of a JSON schema definition into a Nickel predicate and contract. We don't
+/// always use both, so we only store the part which is actually used.
 #[derive(Clone)]
-pub struct ConvertedSchema {
+pub struct ConvertedDef {
+    doc: Option<Documentation>,
+    predicate: Option<Predicate>,
+    contract: Option<Contract>,
+}
+
+impl ConvertedDef {
+    /// Take the contract part out of this definition and convert it to a record field with the
+    /// appropriate definition. This method returns `None` if `self.contract` is `None`.
+    ///
+    /// After calling this method, `self.contract` will be `None`.
+    pub fn contract_as_field(&mut self) -> Option<Field> {
+        Self::as_field(self.contract.take(), self.doc.clone())
+    }
+
+    /// Take the predicate part out of this definition and convert it to a record field with the
+    /// appropriate definition. This method returns `None` if `self.contract` is `None`.
+    ///
+    /// After calling this method, `self.predicate` will be `None`.
+    pub fn predicate_as_field(&mut self) -> Option<Field> {
+        Self::as_field(self.predicate.take(), self.doc.clone())
+    }
+
+    /// Helper including the logic common to `contract_as_field` and `predicate_as_field`.
+    fn as_field<V>(value: Option<V>, doc: Option<Documentation>) -> Option<Field>
+    where
+        RichTerm: From<V>,
+        V: Clone,
+    {
+        let value = RichTerm::from(value?);
+
+        Some(Field {
+            value: Some(value),
+            metadata: FieldMetadata {
+                doc: doc.map(String::from),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+}
+
+/// The conversion of a JSON schema property into a Nickel predicate.
+#[derive(Clone)]
+pub struct ConvertedProp {
     doc: Option<Documentation>,
     predicate: Predicate,
-    contract: Contract,
+}
+
+impl From<ConvertedProp> for Field {
+    fn from(value: ConvertedProp) -> Self {
+        Field {
+            value: Some(value.predicate.into()),
+            metadata: FieldMetadata {
+                doc: value.doc.map(String::from),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
 }
 
 /// State recording which properties and definitions are actually used and how (as predicates or as
@@ -171,6 +229,32 @@ impl RefsUsage {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Return the combined length of all the sets in this state. As `RefsUsage` is used in
+    /// append-only mode, the combined length is useful to check if there were new usages during a
+    /// specific conversion.
+    pub fn len(&self) -> usize {
+        self.defs_predicates.len() + self.defs_contracts.len() + self.props_predicates.len()
+    }
+
+    /// Return the set difference between all the definitions (either predicate or contract)
+    /// referenced in `self` and all the definitions referenced in `other`.
+    ///
+    /// That is, [Self::defs_diff] returns `(self.defs_predicates | self.defs_contracts) -
+    /// (other.defs_predicates + other.defs_contracts)`.
+    pub fn defs_diff(&self, other: &RefsUsage) -> HashSet<String> {
+        &(&self.defs_predicates | &self.defs_contracts)
+            - &(&other.defs_predicates | &other.defs_contracts)
+    }
+
+    /// Extend the usages of `self` with the usages of `other`.
+    pub fn extend(&mut self, other: RefsUsage) {
+        self.defs_predicates
+            .extend(other.defs_predicates.into_iter());
+        self.defs_contracts.extend(other.defs_contracts.into_iter());
+        self.props_predicates
+            .extend(other.props_predicates.into_iter());
+    }
 }
 
 /// An environment of top level schema definitions and nested properties and their conversions into
@@ -178,22 +262,15 @@ impl RefsUsage {
 #[derive(Clone, Default)]
 pub struct Environment {
     /// The top-level definition of the schema.
-    defs: HashMap<String, ConvertedSchema>,
+    definitions: HashMap<String, ConvertedDef>,
     /// The predicates of the properties of the schema. We only need to store the predicates, and
     /// not the contract, as the contract are simply accessible recursively in the resulting
     /// schema. For example, the contract for the reference `#/properties/foo/properties/bar` is
     /// simply `foo.bar`.
     ///
-    /// The key is the path the property. In our previous example, the key would be `["foo",
+    /// The key is the path to the property. In our previous example, the key would be `["foo",
     /// "bar"]`.
-    prop_predicates: HashMap<Vec<String>, ConvertedSchema>,
-    /// Although we store every property in the environment, we will only need to access the one
-    /// that are actually referenced in a `$ref` attribute, which is usually a small subset (and is
-    /// often entirely empty, if there's no local reference to a property).
-    ///
-    /// Thus, while elaborating the schema, we keep track of the properties that are actually used,
-    /// and only include those predicates in the final schema.
-    used_props: HashSet<Vec<String>>,
+    property_preds: HashMap<Vec<String>, ConvertedProp>,
 }
 
 /// Resolve a JSON schema reference to a Nickel term. The resulting Nickel expression will have a
@@ -217,8 +294,8 @@ pub fn resolve_ref(reference: &str, state: &mut RefsUsage, usage: RefUsage) -> R
         );
 
         match usage {
-            RefUsage::Contract => Term::Type(TypeF::Dyn.into()).into(),
-            RefUsage::Predicate => static_access("predicates", ["always"]),
+            RefUsage::Contract => Contract::dynamic().into(),
+            RefUsage::Predicate => Predicate::always().into(),
         }
     };
 
@@ -236,8 +313,8 @@ pub fn resolve_ref(reference: &str, state: &mut RefsUsage, usage: RefUsage) -> R
                     // as a separator as a key. See the documentation of `PROPS_PREDICATES_MANGLED`
                     // for more information.
                     static_access(
-                        PROPS_PREDICATES_MANGLED,
-                        [field_path.path.join("/").as_str()],
+                        ENVIRONMENT_MANGLED,
+                        [PROPS_PREDICATES_MANGLED, field_path.path.join("/").as_str()],
                     )
                 }
             }
@@ -245,11 +322,17 @@ pub fn resolve_ref(reference: &str, state: &mut RefsUsage, usage: RefUsage) -> R
             match usage {
                 RefUsage::Contract => {
                     state.defs_contracts.insert(name.clone());
-                    static_access(DEFINITIONS_MANGLED, [name.as_ref(), "contract"])
+                    static_access(
+                        ENVIRONMENT_MANGLED,
+                        [DEFINITIONS_MANGLED, "contracts", name.as_ref()],
+                    )
                 }
                 RefUsage::Predicate => {
                     state.defs_predicates.insert(name.clone());
-                    static_access(DEFINITIONS_MANGLED, [name.as_ref(), "predicate"])
+                    static_access(
+                        ENVIRONMENT_MANGLED,
+                        [DEFINITIONS_MANGLED, "predicates", name.as_ref()],
+                    )
                 }
             }
         } else {
@@ -266,79 +349,175 @@ impl Environment {
         Self::default()
     }
 
-    /// Create an environment from the top-level JSON schema and a ref state indicating which
-    /// properties and definitions actually need to be considered.
-    pub fn new(root_schema: Schema, state: &RefsUsage) -> Self {
-        // FIXME: Definitions can have their own definitions. Does this handle that
-        //        correctly? Does schema.rs even handle it correctly?
-        todo!()
+    /// Create an environment from the top-level JSON schema and the record usage of refs during
+    /// the conversion of this schema to a Nickel contract or predicate.
+    ///
+    /// Note that we have to repeat the creation process: when converting the referenced
+    /// definitions, those definitions might themselve reference other definitions that were not
+    /// used until now. We record those usage as well, and iterate until no new definition is ever
+    /// referenced.
+    pub fn new(root_schema: &RootSchema, mut refs_usage: RefsUsage) -> Self {
+        let mut definitions = HashMap::new();
+        let mut property_preds = HashMap::new();
+
+        // The stack of definition to process. We might grow this stack as converting some
+        // definitions references new ones.
+        let mut def_stack: Vec<_> = refs_usage
+            .defs_predicates
+            .iter()
+            .chain(&refs_usage.defs_contracts)
+            .cloned()
+            .collect();
+
+        while let Some(def) = def_stack.pop() {
+            let Some(schema) = root_schema.definitions.get(&def) else {
+                eprintln!(
+                    "Warning: definition `{def}` is referenced in the schema but couldn't be found"
+                );
+                continue;
+            };
+
+            let mut cur_usage = RefsUsage::new();
+
+            let doc = Documentation::try_from(schema).ok();
+
+            let predicate = refs_usage
+                .defs_predicates
+                .contains(&def)
+                .then(|| schema.as_predicate(&mut cur_usage));
+
+            let contract = refs_usage.defs_contracts.contains(&def).then(|| {
+                schema.try_as_contract(&mut cur_usage).unwrap_or_else(|| {
+                    Contract::from(
+                        predicate
+                            .clone()
+                            .unwrap_or_else(|| schema.as_predicate(&mut cur_usage)),
+                    )
+                })
+            });
+
+            // Because of the iterative nature of the process, the definition might already be
+            // present in `definitions` (for example, if it was referenced as a predicate, and then
+            // later as a contract during the definition conversion phase). In this case, we simply
+            // merge the entries.
+            match definitions.entry(def) {
+                Entry::Occupied(mut entry) => {
+                    let entry: &mut ConvertedDef = entry.get_mut();
+                    entry.contract = entry.contract.take().or(contract);
+                    entry.predicate = entry.predicate.take().or(predicate);
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(ConvertedDef {
+                        doc,
+                        predicate,
+                        contract,
+                    });
+                }
+            }
+
+            // Adding the new usages to the stack
+            let new_usages = cur_usage.defs_diff(&refs_usage);
+            def_stack.extend(new_usages);
+
+            // Update refs_usage with the usages from this iteration
+            refs_usage.extend(cur_usage);
+        }
+
+        // We need to pass a ref usage object when converting properties and definitions to put
+        // them in the environment. However, we don't care about properties, because they've been
+        // converted at least once already (all properties inconditionally appear in the final
+        // contract). Thus, converting those properties again shoudln't add new usage, and we can
+        // ignore their usage.
+        let mut usage_placeholder = RefsUsage::new();
+
+        for path in refs_usage.props_predicates.iter() {
+            let Some(schema) = get_property(&root_schema.schema, &path) else {
+                eprintln!(
+                    "Warning: property `{}` is referenced in the schema but couldn't be found",
+                    path.join("/")
+                );
+                continue;
+            };
+
+            let predicate = schema.as_predicate(&mut usage_placeholder);
+            let doc = Documentation::try_from(schema).ok();
+
+            property_preds.insert(path.clone(), ConvertedProp { doc, predicate });
+        }
+
+        Environment {
+            definitions,
+            property_preds,
+        }
     }
 
     /// Wrap a Nickel [`RichTerm`] in a let binding containing the definitions
     /// from the environment. This is necessary for the Nickel access terms
     /// tracked in the environment to actually work.
-    pub fn wrap(self, inner: RichTerm) -> RichTerm {
+    pub fn wrap(mut self, inner: RichTerm) -> RichTerm {
         let contracts = self
-            .defs
-            .iter()
-            .map(|(k, v)| {
-                (
-                    Ident::from(k),
-                    Field {
-                        value: Some(v.contract.clone().into()),
-                        metadata: FieldMetadata {
-                            doc: v.doc.clone().map(String::from),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                )
-            })
+            .definitions
+            .iter_mut()
+            .filter_map(|(k, v)| Some((Ident::from(k), v.contract_as_field()?)))
             .collect();
 
         let predicates = self
-            .defs
+            .definitions
             .into_iter()
-            .map(|(k, v)| {
-                (
-                    Ident::from(k),
-                    Field {
-                        value: Some(v.predicate.into()),
-                        metadata: FieldMetadata {
-                            doc: v.doc.map(String::from),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                )
-            })
+            .filter_map(|(k, mut v)| Some((Ident::from(k), v.predicate_as_field()?)))
             .collect();
 
+        let prop_preds = self
+            .property_preds
+            .into_iter()
+            .filter_map(|(k, v)| Some((Ident::from(k.join("/")), Field::from(v))))
+            .collect();
+
+        // All the definitions as a Nickel record
+        let defs = Term::Record(RecordData::with_field_values(
+            [
+                (
+                    Ident::from("contracts"),
+                    Term::Record(RecordData {
+                        fields: contracts,
+                        ..Default::default()
+                    })
+                    .into(),
+                ),
+                (
+                    Ident::from("predicates"),
+                    Term::Record(RecordData {
+                        fields: predicates,
+                        ..Default::default()
+                    })
+                    .into(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ))
+        .into();
+
+        // All the properties (predicates) as a Nickel record
+        let props = Term::Record(RecordData {
+            fields: prop_preds,
+            ..Default::default()
+        })
+        .into();
+
+        // The enclosing record, with one field for the definitions and one for the properties
+        let global_env = Term::Record(RecordData::with_field_values(
+            [
+                (Ident::from(DEFINITIONS_MANGLED), defs),
+                (Ident::from(PROPS_PREDICATES_MANGLED), props),
+            ]
+            .into_iter()
+            .collect(),
+        ));
+
         Term::Let(
-            "definitions".into(),
-            Term::Record(RecordData::with_field_values(
-                [
-                    (
-                        Ident::from("contract"),
-                        Term::Record(RecordData {
-                            fields: contracts,
-                            ..Default::default()
-                        })
-                        .into(),
-                    ),
-                    (
-                        Ident::from("predicate"),
-                        Term::Record(RecordData {
-                            fields: predicates,
-                            ..Default::default()
-                        })
-                        .into(),
-                    ),
-                ]
-                .into_iter()
-                .collect(),
-            ))
-            .into(),
+            Ident::from(ENVIRONMENT_MANGLED),
+            global_env.into(),
             inner,
             LetAttrs {
                 rec: true,
@@ -349,25 +528,45 @@ impl Environment {
     }
 }
 
-// /// Convert the `definitions` field of a json schema mapping identifiers to
-// /// Schemas to an [`Environment`] struct mapping identifiers to Nickel terms
-// impl From<&BTreeMap<String, Schema>> for Environment {
-//     fn from(defs: &BTreeMap<String, Schema>) -> Self {
-//         let terms = defs
-//             .iter()
-//             .map(|(name, schema)| {
-//                 (
-//                     name.clone(),
-//                     ConvertedSchema {
-//                         doc: Documentation::try_from(schema).ok(),
-//                         contract: Contract::try_from(schema).unwrap_or_else(|()| {
-//                             contract_from_predicate(Predicate::from(access_def(name).predicate))
-//                         }),
-//                         predicate: Predicate::from(schema),
-//                     },
-//                 )
-//             })
-//             .collect();
-//         Environment::new(terms)
-//     }
-// }
+/// Get the property located at a path in a schema.
+///
+/// # Example
+///
+/// For a path `["foo", "bar"]`, this function will extract (if it exists) the schema corresponding
+/// to the JSON pointer `properties/foo/properties/bar`.
+///
+/// # Return values
+///
+/// - Returns `Some(subschema)` if the path exists in the schema and points to `subschema`.
+/// - Returns `None` if the path does not exist in the schema or the path is empty.
+///
+/// Note: it looks like we could return the original value upon empty path, but there's a mismatch:
+/// we get a `SchemaObject` reference, and we must return a `Schema` reference. We can't convert
+/// between the two (we can convert between the owned variants easily, but not for refernces).
+/// Since we can special case empty paths before calling to `get_property` if really needed, it's
+/// simpler to just return `None` here.
+pub fn get_property<'a, 'b>(
+    schema_obj: &'a SchemaObject,
+    path: &'b [String],
+) -> Option<&'a Schema> {
+    let mut current: Option<&Schema> = None;
+
+    for prop in path {
+        // We start from a schema object, but then always go from schemas to schemas, which requires
+        // this bit of juggling.
+        let current_obj = match current {
+            // We had at least one iteration before and the current schema is an object, which means we
+            // can indeed index into it.
+            Some(Schema::Object(next)) => next,
+            // We had at least one iteration before but the current schema isn't an object, we we
+            // can't index into it.
+            Some(_) => return None,
+            // This is the first iteration, so we start from the initial schema object
+            None => schema_obj,
+        };
+
+        current = Some(current_obj.object.as_ref()?.properties.get(prop)?);
+    }
+
+    current
+}

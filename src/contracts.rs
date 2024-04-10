@@ -47,6 +47,7 @@ use crate::{
     definitions::{self, RefsUsage},
     predicates::{AsPredicate, Predicate},
     utils::static_access,
+    PREDICATES_LIBRARY,
 };
 
 fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
@@ -67,13 +68,18 @@ impl Contract {
     /// Convert a root JSON schema to a contract. Returns `None` if the schema couldn't be
     /// converted to a (lazy) contract, and thus requires to go through a predicate.
     /// Upon success, returns the contract and the references used in the schema.
-    pub fn from_root_schema(value: RootSchema) -> Option<(Self, RefsUsage)> {
+    pub fn from_root_schema(root_schema: &RootSchema) -> Option<(Self, RefsUsage)> {
         let mut refs_usage = RefsUsage::new();
 
-        value
+        root_schema
             .schema
             .try_as_contract(&mut refs_usage)
             .map(|ctr| (ctr, refs_usage))
+    }
+
+    /// Return the `Dyn` contract, always succeeding.
+    pub fn dynamic() -> Self {
+        Term::Type(TypeF::Dyn.into()).into()
     }
 }
 
@@ -329,7 +335,7 @@ impl From<RichTerm> for Contract {
 impl From<Contract> for RichTerm {
     fn from(Contract(c): Contract) -> Self {
         match c.as_slice() {
-            [] => static_access("predicates", ["always"]).into(),
+            [] => static_access(PREDICATES_LIBRARY, ["always"]).into(),
             // TODO: shouldn't need to clone here
             [rt] => rt.clone(),
             _ => {
@@ -356,7 +362,7 @@ impl From<&InstanceType> for Contract {
     fn from(value: &InstanceType) -> Contract {
         match value {
             InstanceType::Null => Contract::from(Predicate::from(mk_app!(
-                static_access("predicates", ["isType"]),
+                static_access(PREDICATES_LIBRARY, ["isType"]),
                 Term::Enum("Null".into())
             ))),
             InstanceType::Boolean => Contract::from(TypeF::Bool),
@@ -461,7 +467,7 @@ impl From<Predicate> for Contract {
     // messages)
     fn from(pred: Predicate) -> Self {
         mk_app!(
-            static_access("predicates", ["contract_from_predicate"]),
+            static_access(PREDICATES_LIBRARY, ["contract_from_predicate"]),
             pred
         )
         .into()
