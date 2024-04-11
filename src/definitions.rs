@@ -249,11 +249,16 @@ impl RefsUsage {
 
     /// Extend the usages of `self` with the usages of `other`.
     pub fn extend(&mut self, other: RefsUsage) {
-        self.defs_predicates
-            .extend(other.defs_predicates.into_iter());
-        self.defs_contracts.extend(other.defs_contracts.into_iter());
-        self.props_predicates
-            .extend(other.props_predicates.into_iter());
+        self.defs_predicates.extend(other.defs_predicates);
+        self.defs_contracts.extend(other.defs_contracts);
+        self.props_predicates.extend(other.props_predicates);
+    }
+
+    /// Returns `true` if the state is empty, i.e. if no definition or property has been used.
+    pub fn is_empty(&self) -> bool {
+        self.defs_predicates.is_empty()
+            && self.defs_contracts.is_empty()
+            && self.props_predicates.is_empty()
     }
 }
 
@@ -431,7 +436,7 @@ impl Environment {
         let mut usage_placeholder = RefsUsage::new();
 
         for path in refs_usage.props_predicates.iter() {
-            let Some(schema) = get_property(&root_schema.schema, &path) else {
+            let Some(schema) = get_property(&root_schema.schema, path) else {
                 eprintln!(
                     "Warning: property `{}` is referenced in the schema but couldn't be found",
                     path.join("/")
@@ -470,7 +475,7 @@ impl Environment {
         let prop_preds = self
             .property_preds
             .into_iter()
-            .filter_map(|(k, v)| Some((Ident::from(k.join("/")), Field::from(v))))
+            .map(|(k, v)| (Ident::from(k.join("/")), Field::from(v)))
             .collect();
 
         // All the definitions as a Nickel record
@@ -545,10 +550,7 @@ impl Environment {
 /// between the two (we can convert between the owned variants easily, but not for refernces).
 /// Since we can special case empty paths before calling to `get_property` if really needed, it's
 /// simpler to just return `None` here.
-pub fn get_property<'a, 'b>(
-    schema_obj: &'a SchemaObject,
-    path: &'b [String],
-) -> Option<&'a Schema> {
+pub fn get_property<'a>(schema_obj: &'a SchemaObject, path: &[String]) -> Option<&'a Schema> {
     let mut current: Option<&Schema> = None;
 
     for prop in path {

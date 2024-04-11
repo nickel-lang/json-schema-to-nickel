@@ -335,7 +335,7 @@ impl From<RichTerm> for Contract {
 impl From<Contract> for RichTerm {
     fn from(Contract(c): Contract) -> Self {
         match c.as_slice() {
-            [] => static_access(PREDICATES_LIBRARY, ["always"]).into(),
+            [] => static_access(PREDICATES_LIBRARY, ["always"]),
             // TODO: shouldn't need to clone here
             [rt] => rt.clone(),
             _ => {
