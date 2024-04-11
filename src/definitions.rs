@@ -100,17 +100,18 @@ pub struct JsonPointer {
 }
 
 impl JsonPointer {
-    fn new(ptr: &str) -> Self {
+    /// Create a new JSON pointer from a string representation (valid according to RFC6901).
+    pub fn new(ptr: &str) -> Self {
         Self {
             path: ptr.split('/').map(decode_json_ptr_part).collect(),
         }
     }
 
-    /// Take a path pointing to a property and returns the corresponding path in the final
+    /// Take a JSON pointer to a property and returns the corresponding path in the final
     /// generated contract, that is, with all the intermediate `properties` stripped.
     ///
-    /// For example, running [Self::as_field_path] on a JSON pointer
-    /// `#/properties/foo/properties/bar` will return the field path `["foo", "bar"]`.
+    /// For example, running [Self::try_as_field_path] on a JSON pointer
+    /// `/properties/foo/properties/bar` will return the field path `["foo", "bar"]`.
     fn try_as_field_path(&self) -> Option<FieldPath> {
         let mut it = self.path.iter();
         let mut result = Vec::with_capacity(self.path.len() / 2);
@@ -173,10 +174,9 @@ impl ConvertedDef {
     /// Helper including the logic common to `contract_as_field` and `predicate_as_field`.
     fn as_field<V>(value: Option<V>, doc: Option<Documentation>) -> Option<Field>
     where
-        RichTerm: From<V>,
-        V: Clone,
+        V: Clone + Into<RichTerm>,
     {
-        let value = RichTerm::from(value?);
+        let value = value?.into();
 
         Some(Field {
             value: Some(value),
@@ -219,7 +219,7 @@ pub struct RefsUsage {
     pub defs_contracts: HashSet<String>,
     /// The properties referenced as predicates somewhere in the schema (stored as path).
     ///
-    /// We don't need to keep track of the contracts, as they will inconditionnally be constituents
+    /// We don't need to keep track of the contracts, as they will unconditionally be constituents
     /// of the final schema.
     pub props_predicates: HashSet<Vec<String>>,
 }
@@ -230,18 +230,11 @@ impl RefsUsage {
         Self::default()
     }
 
-    /// Return the combined length of all the sets in this state. As `RefsUsage` is used in
-    /// append-only mode, the combined length is useful to check if there were new usages during a
-    /// specific conversion.
-    pub fn len(&self) -> usize {
-        self.defs_predicates.len() + self.defs_contracts.len() + self.props_predicates.len()
-    }
-
     /// Return the set difference between all the definitions (either predicate or contract)
     /// referenced in `self` and all the definitions referenced in `other`.
     ///
     /// That is, [Self::defs_diff] returns `(self.defs_predicates | self.defs_contracts) -
-    /// (other.defs_predicates + other.defs_contracts)`.
+    /// (other.defs_predicates | other.defs_contracts)`.
     pub fn defs_diff(&self, other: &RefsUsage) -> HashSet<String> {
         &(&self.defs_predicates | &self.defs_contracts)
             - &(&other.defs_predicates | &other.defs_contracts)
@@ -253,13 +246,6 @@ impl RefsUsage {
         self.defs_contracts.extend(other.defs_contracts);
         self.props_predicates.extend(other.props_predicates);
     }
-
-    /// Returns `true` if the state is empty, i.e. if no definition or property has been used.
-    pub fn is_empty(&self) -> bool {
-        self.defs_predicates.is_empty()
-            && self.defs_contracts.is_empty()
-            && self.props_predicates.is_empty()
-    }
 }
 
 /// An environment of top level schema definitions and nested properties and their conversions into
@@ -269,7 +255,7 @@ pub struct Environment {
     /// The top-level definition of the schema.
     definitions: HashMap<String, ConvertedDef>,
     /// The predicates of the properties of the schema. We only need to store the predicates, and
-    /// not the contract, as the contract are simply accessible recursively in the resulting
+    /// not the contracts, as the contracts are simply accessible recursively in the resulting
     /// schema. For example, the contract for the reference `#/properties/foo/properties/bar` is
     /// simply `foo.bar`.
     ///
@@ -313,7 +299,7 @@ pub fn resolve_ref(reference: &str, state: &mut RefsUsage, usage: RefUsage) -> R
                 RefUsage::Predicate => {
                     // If we are referring to a property as a predicate, we need to keep track of it.
                     state.props_predicates.insert(field_path.path.clone());
-                    // We don't index the properties elements by elements, as in
+                    // We don't index the properties element by element, as in
                     // `<PROPS_PREDICATES_MANGLED>.foo.bar.baz`, but we use the whole path with `/`
                     // as a separator as a key. See the documentation of `PROPS_PREDICATES_MANGLED`
                     // for more information.
@@ -560,7 +546,7 @@ pub fn get_property<'a>(schema_obj: &'a SchemaObject, path: &[String]) -> Option
             // We had at least one iteration before and the current schema is an object, which means we
             // can indeed index into it.
             Some(Schema::Object(next)) => next,
-            // We had at least one iteration before but the current schema isn't an object, we we
+            // We had at least one iteration before but the current schema isn't an object, we
             // can't index into it.
             Some(_) => return None,
             // This is the first iteration, so we start from the initial schema object

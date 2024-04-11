@@ -34,10 +34,6 @@ fn translation_typecheck_test(
     let contract = if test_case.schema.is_object() {
         root_schema(&dbg!(serde_json::from_value(test_case.schema).unwrap()))
     } else {
-        // Otherwise, we have to work a bit to convet a `Schema` instead of `RootSchema`, because
-        // the json-schema-to-nickel API tries hard to ensure we always convert a whole root schema
-        // for reference handling reasons.
-
         let schema: Schema = dbg!(serde_json::from_value(test_case.schema).unwrap());
 
         wrap_contract(

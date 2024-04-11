@@ -90,7 +90,7 @@ pub trait TryAsContract {
     /// component couldn't be converted to a lazy contract, and thus requires to go through a
     /// predicate.
     ///
-    /// `try_convert` will record the references used during the conversion through the `refs_usage` parameter.
+    /// `try_as_contract` will record the references used during the conversion through the `refs_usage` parameter.
     fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract>;
 }
 
