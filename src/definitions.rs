@@ -107,7 +107,7 @@ impl JsonPointer {
         }
     }
 
-    /// Take a JSON pointer to a property and returns the corresponding path in the final
+    /// Take a JSON pointer to a property and return the corresponding path in the final
     /// generated contract, that is, with all the intermediate `properties` stripped.
     ///
     /// For example, running [Self::try_as_field_path] on a JSON pointer
@@ -117,7 +117,7 @@ impl JsonPointer {
         let mut result = Vec::with_capacity(self.path.len() / 2);
 
         // We expect that the path can be grouped as a sequence of two elements, where the first
-        // one is always `properties`, and the second one corresponds is the property name.
+        // one is always `properties`, and the second one corresponds to the property name.
         while let Some(part) = it.next() {
             if part != "properties" {
                 return None;
@@ -344,8 +344,8 @@ impl Environment {
     /// the conversion of this schema to a Nickel contract or predicate.
     ///
     /// Note that we have to repeat the creation process: when converting the referenced
-    /// definitions, those definitions might themselve reference other definitions that were not
-    /// used until now. We record those usage as well, and iterate until no new definition is ever
+    /// definitions, those definitions might themselves reference other definitions that were not
+    /// used until now. We record those usages as well, and iterate until no new definition is ever
     /// referenced.
     pub fn new(root_schema: &RootSchema, mut refs_usage: RefsUsage) -> Self {
         let mut definitions = HashMap::new();
@@ -416,8 +416,8 @@ impl Environment {
 
         // We need to pass a ref usage object when converting properties and definitions to put
         // them in the environment. However, we don't care about properties, because they've been
-        // converted at least once already (all properties inconditionally appear in the final
-        // contract). Thus, converting those properties again shoudln't add new usage, and we can
+        // converted at least once already (all properties unconditionally appear in the final
+        // contract). Thus, converting those properties again shouldn't add new usage, and we can
         // ignore their usage.
         let mut usage_placeholder = RefsUsage::new();
 
@@ -533,7 +533,7 @@ impl Environment {
 ///
 /// Note: it looks like we could return the original value upon empty path, but there's a mismatch:
 /// we get a `SchemaObject` reference, and we must return a `Schema` reference. We can't convert
-/// between the two (we can convert between the owned variants easily, but not for refernces).
+/// between the two (we can convert between the owned variants easily, but not for references).
 /// Since we can special case empty paths before calling to `get_property` if really needed, it's
 /// simpler to just return `None` here.
 pub fn get_property<'a>(schema_obj: &'a SchemaObject, path: &[String]) -> Option<&'a Schema> {
