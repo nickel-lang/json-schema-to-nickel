@@ -1,9 +1,8 @@
-//! # Nickel contract generation for certain JSON schemas
+//! # Nickel contract generation for JSON schemas
 //!
-//! Since generating lazy Nickel contracts for arbitrary JSON schemas is
-//! impossible, this module restricts itself to generating record contracts for
-//! JSON schemas that are simple enough. A JSON schema can be successfully
-//! turned into a record contract if it takes the form
+//! Since generating lazy Nickel contracts for arbitrary JSON schemas is impossible, this module
+//! restricts itself to generating record contracts for JSON schemas that are simple enough. A JSON
+//! schema can be successfully turned into a record contract if it takes the form
 //!
 //! ```json
 //! {
@@ -25,6 +24,8 @@
 //! ```
 //!
 //! is turned into the Nickel type `Bool`.
+use crate::definitions::RefUsage;
+use schemars::schema::RootSchema;
 use std::collections::{BTreeMap, BTreeSet};
 
 use nickel_lang_core::{
@@ -42,7 +43,12 @@ use schemars::schema::{
 };
 use serde_json::Value;
 
-use crate::{definitions, predicates::Predicate, utils::static_access};
+use crate::{
+    definitions::{self, RefsUsage},
+    predicates::{AsPredicate, Predicate},
+    utils::static_access,
+    PREDICATES_LIBRARY_ID,
+};
 
 fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
     const IGNORED_FIELDS: &[&str] = &["$comment"];
@@ -58,6 +64,268 @@ fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
 #[derive(Clone)]
 pub struct Contract(Vec<RichTerm>);
 
+impl Contract {
+    /// Convert a root JSON schema to a contract. Returns `None` if the schema couldn't be
+    /// converted to a (lazy) contract, and thus requires to go through a predicate.
+    /// Upon success, returns the contract and the references used in the schema.
+    pub fn from_root_schema(root_schema: &RootSchema) -> Option<(Self, RefsUsage)> {
+        let mut refs_usage = RefsUsage::new();
+
+        root_schema
+            .schema
+            .try_as_contract(&mut refs_usage)
+            .map(|ctr| (ctr, refs_usage))
+    }
+
+    /// Return the `Dyn` contract, always succeeding.
+    pub fn dynamic() -> Self {
+        Term::Type(TypeF::Dyn.into()).into()
+    }
+}
+
+/// [TryAsContract] is essentially like `TryInto<Contract>` but passes additional state around used for
+/// effective reference resolution.
+pub trait TryAsContract {
+    /// Try to convert a JSON schema component `Self` to a contract. Returns `None` if the
+    /// component couldn't be converted to a lazy contract, and thus requires to go through a
+    /// predicate.
+    ///
+    /// `try_as_contract` will record the references used during the conversion through the `refs_usage` parameter.
+    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract>;
+}
+
+pub trait AsPredicateContract {
+    /// Convert a JSON schema to a contract by first converting it to a predicate, and then use
+    /// json-schema-to-nickel's `from_predicate` helper. As opposed to [TryAsContract::try_as_contract], this
+    /// conversion can't fail. However, it is less desirable (as it throws lazyness out of the
+    /// window and is less LSP-friendly for e.g. completion), so we generally try to use
+    /// [TryAsContract::try_as_contract] first.
+    fn as_predicate_contract(&self, refs_usage: &mut RefsUsage) -> Contract;
+}
+
+impl<T> AsPredicateContract for T
+where
+    T: AsPredicate,
+{
+    fn as_predicate_contract(&self, refs_usage: &mut RefsUsage) -> Contract {
+        Contract::from(self.as_predicate(refs_usage))
+    }
+}
+
+impl TryAsContract for Schema {
+    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract> {
+        match self {
+            Schema::Bool(true) => Some(Contract(vec![])),
+            Schema::Bool(false) => None,
+            Schema::Object(obj) => obj.try_as_contract(refs_usage),
+        }
+    }
+}
+
+impl TryAsContract for SchemaObject {
+    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract> {
+        match self {
+            // a raw type
+            SchemaObject {
+                metadata: _,
+                instance_type: Some(SingleOrVec::Single(instance_type)),
+                format: _,
+                enum_values: None,
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: None,
+                object: None,
+                reference: None,
+                extensions,
+            } if only_ignored_fields(extensions) => {
+                // We ultimately produce a Flat type based on a contract with
+                // only a type in it. Semantically, this is kind of weird. But
+                // the pretty printer doesn't care, and it simplifies our code
+                // significantly.
+                Some(Contract::from(instance_type.as_ref()))
+            }
+            // a reference to a definition
+            SchemaObject {
+                metadata: _,
+                instance_type: None,
+                format: None,
+                enum_values: None,
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: None,
+                object: None,
+                reference: Some(reference),
+                extensions,
+            } if only_ignored_fields(extensions) => Some(Contract::from(definitions::resolve_ref(
+                reference,
+                refs_usage,
+                RefUsage::Contract,
+            ))),
+            // a freeform record
+            SchemaObject {
+                metadata: _,
+                instance_type: Some(SingleOrVec::Single(instance_type)),
+                format: None,
+                enum_values: None,
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: None,
+                object: None,
+                reference: None,
+                extensions,
+            } if **instance_type == InstanceType::Object && only_ignored_fields(extensions) => {
+                Some(Contract::from(Term::Record(RecordData {
+                    attrs: RecordAttrs { open: true },
+                    ..Default::default()
+                })))
+            }
+            // a record with sub-field types specified
+            SchemaObject {
+                metadata: _,
+                instance_type: Some(SingleOrVec::Single(instance_type)),
+                format: None,
+                enum_values: None,
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: None,
+                object: Some(ov),
+                reference: None,
+                extensions,
+            } if **instance_type == InstanceType::Object && only_ignored_fields(extensions) => {
+                ov.try_as_contract(refs_usage)
+            }
+            // Enum contract with all strings
+            // => | std.enum.TagOrString | [| 'foo, 'bar, 'baz |]
+            SchemaObject {
+                metadata: _,
+                instance_type: Some(SingleOrVec::Single(instance_type)),
+                format: None,
+                enum_values: Some(values),
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: None,
+                object: None,
+                reference: None,
+                extensions: _,
+            } if **instance_type == InstanceType::String => {
+                let enum_rows: EnumRows =
+                    values
+                        .iter()
+                        .try_fold(EnumRows(EnumRowsF::Empty), |acc, value| {
+                            let id = match value {
+                                Value::String(s) => s.into(),
+                                _ => return None,
+                            };
+                            Some(EnumRows(EnumRowsF::Extend {
+                                row: id,
+                                tail: Box::new(acc),
+                            }))
+                        })?;
+                Some(Contract(vec![
+                    static_access("std", ["enum", "TagOrString"]),
+                    Term::Type(TypeF::Enum(enum_rows).into()).into(),
+                ]))
+            }
+            SchemaObject {
+                metadata: _,
+                instance_type: Some(SingleOrVec::Single(instance_type)),
+                format: None,
+                enum_values: None,
+                const_value: None,
+                subschemas: None,
+                number: None,
+                string: None,
+                array: Some(av),
+                object: None,
+                reference: None,
+                extensions: _,
+            } if **instance_type == InstanceType::Array => av.try_as_contract(refs_usage),
+            _ => None,
+        }
+    }
+}
+
+impl TryAsContract for ObjectValidation {
+    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract> {
+        fn is_open_record(additional: Option<&Schema>) -> bool {
+            match additional {
+                Some(Schema::Bool(open)) => *open,
+                None => true,
+                _ => unreachable!("additional_properties must be checked beforehand"),
+            }
+        }
+
+        // box / deref patterns aren't stabilized, so we have to separate out
+        // `additional_properties` as a separate pattern
+        // SEE: https://github.com/rust-lang/rust/issues/29641
+        // SEE: https://github.com/rust-lang/rust/issues/87121
+        match (self, self.additional_properties.as_deref()) {
+            (
+                ObjectValidation {
+                    max_properties: None,
+                    min_properties: None,
+                    required,
+                    properties,
+                    pattern_properties,
+                    additional_properties,
+                    property_names: None,
+                },
+                None | Some(Schema::Bool(_)),
+            ) if pattern_properties.is_empty() => Some(Contract::from(generate_record_contract(
+                required,
+                properties,
+                is_open_record(additional_properties.as_deref()),
+                refs_usage,
+            ))),
+            _ => None,
+        }
+    }
+}
+
+impl TryAsContract for ArrayValidation {
+    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract> {
+        if let ArrayValidation {
+            items: Some(SingleOrVec::Single(s)),
+            additional_items: None,
+            max_items: None,
+            min_items: None,
+            unique_items: None,
+            contains: None,
+        } = self
+        {
+            let elt = s
+                .try_as_contract(refs_usage)
+                .unwrap_or_else(|| s.as_predicate_contract(refs_usage));
+            if let [elt] = elt.0.as_slice() {
+                Some(Contract::from(TypeF::Array(Box::new(
+                    TypeF::Flat(elt.clone()).into(),
+                ))))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+}
+
+// The following conversions:
+//
+// 1. Are infallible
+// 2. Don't do reference resolution
+//
+// We implement `From` directly instead of `TryConvert`.
+
 impl From<RichTerm> for Contract {
     fn from(rt: RichTerm) -> Self {
         Contract(vec![rt])
@@ -67,7 +335,7 @@ impl From<RichTerm> for Contract {
 impl From<Contract> for RichTerm {
     fn from(Contract(c): Contract) -> Self {
         match c.as_slice() {
-            [] => Predicate::from(&Schema::Bool(true)).into(),
+            [] => static_access(PREDICATES_LIBRARY_ID, ["always"]),
             // TODO: shouldn't need to clone here
             [rt] => rt.clone(),
             _ => {
@@ -93,13 +361,10 @@ impl From<TypeF<Box<Type>, RecordRows, EnumRows>> for Contract {
 impl From<&InstanceType> for Contract {
     fn from(value: &InstanceType) -> Contract {
         match value {
-            InstanceType::Null => contract_from_predicate(
-                mk_app!(
-                    static_access("predicates", ["isType"]),
-                    Term::Enum("Null".into())
-                )
-                .into(),
-            ),
+            InstanceType::Null => Contract::from(Predicate::from(mk_app!(
+                static_access(PREDICATES_LIBRARY_ID, ["isType"]),
+                Term::Enum("Null".into())
+            ))),
             InstanceType::Boolean => Contract::from(TypeF::Bool),
             InstanceType::Object => Contract::from(Term::Record(RecordData {
                 attrs: RecordAttrs { open: true },
@@ -109,217 +374,6 @@ impl From<&InstanceType> for Contract {
             InstanceType::Number => Contract::from(TypeF::Number),
             InstanceType::String => Contract::from(TypeF::String),
             InstanceType::Integer => Contract::from(static_access("std", ["number", "Integer"])),
-        }
-    }
-}
-
-impl TryFrom<&ObjectValidation> for Contract {
-    type Error = ();
-
-    fn try_from(value: &ObjectValidation) -> Result<Self, Self::Error> {
-        fn is_open_record(additional: Option<&Schema>) -> bool {
-            match additional {
-                Some(Schema::Bool(open)) => *open,
-                None => true,
-                _ => unreachable!("additional_properties must be checked beforehand"),
-            }
-        }
-
-        // box / deref patterns aren't stabilized, so we have to separate out
-        // `additional_properties` as a separate pattern
-        // SEE: https://github.com/rust-lang/rust/issues/29641
-        // SEE: https://github.com/rust-lang/rust/issues/87121
-        match (value, value.additional_properties.as_deref()) {
-            (
-                ObjectValidation {
-                    max_properties: None,
-                    min_properties: None,
-                    required,
-                    properties,
-                    pattern_properties,
-                    additional_properties,
-                    property_names: None,
-                },
-                None | Some(Schema::Bool(_)),
-            ) if pattern_properties.is_empty() => Ok(Contract::from(generate_record_contract(
-                required,
-                properties,
-                is_open_record(additional_properties.as_deref()),
-            ))),
-            _ => Err(()),
-        }
-    }
-}
-
-impl TryFrom<&ArrayValidation> for Contract {
-    type Error = ();
-
-    fn try_from(val: &ArrayValidation) -> Result<Self, Self::Error> {
-        if let ArrayValidation {
-            items: Some(SingleOrVec::Single(s)),
-            additional_items: None,
-            max_items: None,
-            min_items: None,
-            unique_items: None,
-            contains: None,
-        } = val
-        {
-            let elt = Contract::try_from(s.as_ref())
-                .unwrap_or_else(|_| contract_from_predicate(Predicate::from(s.as_ref())));
-            if let [elt] = elt.0.as_slice() {
-                Ok(Contract::from(TypeF::Array(Box::new(
-                    TypeF::Flat(elt.clone()).into(),
-                ))))
-            } else {
-                Err(())
-            }
-        } else {
-            Err(())
-        }
-    }
-}
-
-impl TryFrom<&SchemaObject> for Contract {
-    type Error = ();
-
-    fn try_from(value: &SchemaObject) -> Result<Self, Self::Error> {
-        match value {
-            // a raw type
-            SchemaObject {
-                metadata: _,
-                instance_type: Some(SingleOrVec::Single(instance_type)),
-                format: _,
-                enum_values: None,
-                const_value: None,
-                subschemas: None,
-                number: None,
-                string: None,
-                array: None,
-                object: None,
-                reference: None,
-                extensions,
-            } if only_ignored_fields(extensions) => {
-                // We ultimately produce a Flat type based on a contract with
-                // only a type in it. Semantically, this is kind of weird. But
-                // the pretty printer doesn't care, and it simplifies our code
-                // significantly.
-                Ok(Contract::from(instance_type.as_ref()))
-            }
-            // a reference to a definition
-            SchemaObject {
-                metadata: _,
-                instance_type: None,
-                format: None,
-                enum_values: None,
-                const_value: None,
-                subschemas: None,
-                number: None,
-                string: None,
-                array: None,
-                object: None,
-                reference: Some(reference),
-                extensions,
-            } if only_ignored_fields(extensions) => {
-                Ok(Contract::from(definitions::reference(reference).contract))
-            }
-            // a freeform record
-            SchemaObject {
-                metadata: _,
-                instance_type: Some(SingleOrVec::Single(instance_type)),
-                format: None,
-                enum_values: None,
-                const_value: None,
-                subschemas: None,
-                number: None,
-                string: None,
-                array: None,
-                object: None,
-                reference: None,
-                extensions,
-            } if **instance_type == InstanceType::Object && only_ignored_fields(extensions) => {
-                Ok(Contract::from(Term::Record(RecordData {
-                    attrs: RecordAttrs { open: true },
-                    ..Default::default()
-                })))
-            }
-            // a record with sub-field types specified
-            SchemaObject {
-                metadata: _,
-                instance_type: Some(SingleOrVec::Single(instance_type)),
-                format: None,
-                enum_values: None,
-                const_value: None,
-                subschemas: None,
-                number: None,
-                string: None,
-                array: None,
-                object: Some(ov),
-                reference: None,
-                extensions,
-            } if **instance_type == InstanceType::Object && only_ignored_fields(extensions) => {
-                ov.as_ref().try_into()
-            }
-            // Enum contract with all strings
-            // => | std.enum.TagOrString | [| 'foo, 'bar, 'baz |]
-            SchemaObject {
-                metadata: _,
-                instance_type: Some(SingleOrVec::Single(instance_type)),
-                format: None,
-                enum_values: Some(values),
-                const_value: None,
-                subschemas: None,
-                number: None,
-                string: None,
-                array: None,
-                object: None,
-                reference: None,
-                extensions: _,
-            } if **instance_type == InstanceType::String => {
-                let enum_rows: EnumRows =
-                    values
-                        .iter()
-                        .try_fold(EnumRows(EnumRowsF::Empty), |acc, value| {
-                            let id = match value {
-                                Value::String(s) => s.into(),
-                                _ => return Err(()),
-                            };
-                            Ok(EnumRows(EnumRowsF::Extend {
-                                row: id,
-                                tail: Box::new(acc),
-                            }))
-                        })?;
-                Ok(Contract(vec![
-                    static_access("std", ["enum", "TagOrString"]),
-                    Term::Type(TypeF::Enum(enum_rows).into()).into(),
-                ]))
-            }
-            SchemaObject {
-                metadata: _,
-                instance_type: Some(SingleOrVec::Single(instance_type)),
-                format: None,
-                enum_values: None,
-                const_value: None,
-                subschemas: None,
-                number: None,
-                string: None,
-                array: Some(av),
-                object: None,
-                reference: None,
-                extensions: _,
-            } if **instance_type == InstanceType::Array => av.as_ref().try_into(),
-            _ => Err(()),
-        }
-    }
-}
-
-impl TryFrom<&Schema> for Contract {
-    type Error = ();
-
-    fn try_from(value: &Schema) -> Result<Self, Self::Error> {
-        match value {
-            Schema::Bool(true) => Ok(Contract(vec![])),
-            Schema::Bool(false) => Err(()),
-            Schema::Object(obj) => obj.try_into(),
         }
     }
 }
@@ -377,12 +431,14 @@ fn generate_record_contract(
     required: &BTreeSet<String>,
     properties: &BTreeMap<String, Schema>,
     open: bool,
+    refs_usage: &mut RefsUsage,
 ) -> RichTerm {
     let fields = properties.iter().map(|(name, schema)| {
         // try to convert to a contract, otherwise convert the predicate version
         // to a contract
-        let contract = Contract::try_from(schema)
-            .unwrap_or_else(|()| contract_from_predicate(Predicate::from(schema)));
+        let contract = schema
+            .try_as_contract(refs_usage)
+            .unwrap_or_else(|| schema.as_predicate_contract(refs_usage));
         let doc = Documentation::try_from(schema).ok();
         (
             name.into(),
@@ -405,12 +461,15 @@ fn generate_record_contract(
     .into()
 }
 
-/// Convert `predicate` into a contract, suitable for use in a contract
-/// assertion `term | Contract`.
-pub fn contract_from_predicate(predicate: Predicate) -> Contract {
-    mk_app!(
-        static_access("predicates", ["contract_from_predicate"]),
-        predicate
-    )
-    .into()
+impl From<Predicate> for Contract {
+    // Convert a predicate to a contract by calling a function similar to
+    // `std.contract.from_predicate` (but which does a bit more about propagating meaningful error
+    // messages)
+    fn from(pred: Predicate) -> Self {
+        mk_app!(
+            static_access(PREDICATES_LIBRARY_ID, ["contract_from_predicate"]),
+            pred
+        )
+        .into()
+    }
 }

@@ -1,11 +1,11 @@
+use schemars::schema::Schema;
 use std::io::stderr;
 
 use json_schema_test_suite::{json_schema_test_suite, TestCase};
 use json_schema_to_nickel::{
-    definitions::Environment, predicates::Predicate, root_schema, wrap_predicate,
+    definitions::Environment, predicates::AsPredicate, root_schema, wrap_contract,
 };
 use nickel_lang_core::{eval::cache::lazy::CBNCache, program::Program, term::RichTerm};
-use schemars::schema::Schema;
 use stringreader::StringReader;
 
 #[json_schema_test_suite("vendor/JSON-Schema-Test-Suite", "draft7", {
@@ -34,11 +34,11 @@ fn translation_typecheck_test(
     let contract = if test_case.schema.is_object() {
         root_schema(&dbg!(serde_json::from_value(test_case.schema).unwrap()))
     } else {
-        wrap_predicate(
+        let schema: Schema = dbg!(serde_json::from_value(test_case.schema).unwrap());
+
+        wrap_contract(
             Environment::empty(),
-            Predicate::from(dbg!(
-                &serde_json::from_value::<Schema>(test_case.schema).unwrap()
-            )),
+            schema.as_predicate(&mut Default::default()).into(),
         )
     };
 
