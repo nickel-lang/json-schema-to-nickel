@@ -47,7 +47,7 @@ use crate::{
     definitions::{self, RefsUsage},
     predicates::{AsPredicate, Predicate},
     utils::static_access,
-    PREDICATES_LIBRARY,
+    PREDICATES_LIBRARY_ID,
 };
 
 fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
@@ -94,20 +94,20 @@ pub trait TryAsContract {
     fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract>;
 }
 
-pub trait AsCtrThruPred {
+pub trait AsPredicateContract {
     /// Convert a JSON schema to a contract by first converting it to a predicate, and then use
-    /// json-schema-to-nickel's `from_predicate` helper. As opposed to [TryAscontract::try_as_contract], this
+    /// json-schema-to-nickel's `from_predicate` helper. As opposed to [TryAsContract::try_as_contract], this
     /// conversion can't fail. However, it is less desirable (as it throws lazyness out of the
     /// window and is less LSP-friendly for e.g. completion), so we generally try to use
-    /// [TryAscontract::try_as_contract] first.
-    fn as_ctr_thru_pred(&self, refs_usage: &mut RefsUsage) -> Contract;
+    /// [TryAsContract::try_as_contract] first.
+    fn as_predicate_contract(&self, refs_usage: &mut RefsUsage) -> Contract;
 }
 
-impl<T> AsCtrThruPred for T
+impl<T> AsPredicateContract for T
 where
     T: AsPredicate,
 {
-    fn as_ctr_thru_pred(&self, refs_usage: &mut RefsUsage) -> Contract {
+    fn as_predicate_contract(&self, refs_usage: &mut RefsUsage) -> Contract {
         Contract::from(self.as_predicate(refs_usage))
     }
 }
@@ -305,7 +305,7 @@ impl TryAsContract for ArrayValidation {
         {
             let elt = s
                 .try_as_contract(refs_usage)
-                .unwrap_or_else(|| s.as_ctr_thru_pred(refs_usage));
+                .unwrap_or_else(|| s.as_predicate_contract(refs_usage));
             if let [elt] = elt.0.as_slice() {
                 Some(Contract::from(TypeF::Array(Box::new(
                     TypeF::Flat(elt.clone()).into(),
@@ -335,7 +335,7 @@ impl From<RichTerm> for Contract {
 impl From<Contract> for RichTerm {
     fn from(Contract(c): Contract) -> Self {
         match c.as_slice() {
-            [] => static_access(PREDICATES_LIBRARY, ["always"]),
+            [] => static_access(PREDICATES_LIBRARY_ID, ["always"]),
             // TODO: shouldn't need to clone here
             [rt] => rt.clone(),
             _ => {
@@ -362,7 +362,7 @@ impl From<&InstanceType> for Contract {
     fn from(value: &InstanceType) -> Contract {
         match value {
             InstanceType::Null => Contract::from(Predicate::from(mk_app!(
-                static_access(PREDICATES_LIBRARY, ["isType"]),
+                static_access(PREDICATES_LIBRARY_ID, ["isType"]),
                 Term::Enum("Null".into())
             ))),
             InstanceType::Boolean => Contract::from(TypeF::Bool),
@@ -438,7 +438,7 @@ fn generate_record_contract(
         // to a contract
         let contract = schema
             .try_as_contract(refs_usage)
-            .unwrap_or_else(|| schema.as_ctr_thru_pred(refs_usage));
+            .unwrap_or_else(|| schema.as_predicate_contract(refs_usage));
         let doc = Documentation::try_from(schema).ok();
         (
             name.into(),
@@ -467,7 +467,7 @@ impl From<Predicate> for Contract {
     // messages)
     fn from(pred: Predicate) -> Self {
         mk_app!(
-            static_access(PREDICATES_LIBRARY, ["contract_from_predicate"]),
+            static_access(PREDICATES_LIBRARY_ID, ["contract_from_predicate"]),
             pred
         )
         .into()

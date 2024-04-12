@@ -23,7 +23,7 @@ use serde_json::Value;
 use crate::{
     definitions::{self, RefsUsage},
     utils::static_access,
-    PREDICATES_LIBRARY,
+    PREDICATES_LIBRARY_ID,
 };
 
 #[derive(Clone)]
@@ -41,7 +41,7 @@ impl Predicate {
 
     /// Return an always succeeding predicate.
     pub fn always() -> Self {
-        static_access(PREDICATES_LIBRARY, ["always"]).into()
+        static_access(PREDICATES_LIBRARY_ID, ["always"]).into()
     }
 }
 
@@ -49,15 +49,15 @@ impl Predicate {
 /// effective reference resolution. Similar to [crate::contracts::TryAsContract] for [Predicate], but
 /// infallible.
 pub trait AsPredicate {
-    /// Convert a JSON schema component `Self` to a predicate. [as_predicate] carries additional
-    /// state related to reference resolution.
+    /// Convert a JSON schema component `Self` to a predicate. [Self::as_predicate] carries
+    /// additional state related to reference resolution.
     fn as_predicate(&self, refs_usage: &mut RefsUsage) -> Predicate;
 }
 
 /// [AsPredicates] is a variant of [AsPredicate] returning a sequence of predicates.
 pub trait AsPredicates {
-    /// Convert a JSON schema component `Self` to a list of predicates. [as_predicates] carries additional
-    /// state related to reference resolution.
+    /// Convert a JSON schema component `Self` to a list of predicates. [Self::as_predicates]
+    /// carries additional state related to reference resolution.
     fn as_predicates(&self, refs_usage: &mut RefsUsage) -> Predicates;
 }
 
@@ -119,7 +119,7 @@ impl From<&InstanceType> for Predicate {
             InstanceType::String => Term::Enum("String".into()),
             InstanceType::Integer => Term::Enum("Integer".into()),
         };
-        mk_app!(static_access(PREDICATES_LIBRARY, ["isType"]), type_tag).into()
+        mk_app!(static_access(PREDICATES_LIBRARY_ID, ["isType"]), type_tag).into()
     }
 }
 
@@ -128,7 +128,7 @@ impl From<&SingleOrVec<InstanceType>> for Predicate {
         match value {
             SingleOrVec::Single(t) => t.as_ref().into(),
             SingleOrVec::Vec(ts) => mk_app!(
-                static_access(PREDICATES_LIBRARY, ["anyOf"]),
+                static_access(PREDICATES_LIBRARY_ID, ["anyOf"]),
                 Term::Array(
                     Array::new(ts.iter().map(|t| Predicate::from(t).into()).collect()),
                     Default::default()
@@ -144,7 +144,7 @@ impl From<&SingleOrVec<InstanceType>> for Predicate {
 impl From<&[Value]> for Predicate {
     fn from(value: &[Value]) -> Self {
         mk_app!(
-            static_access(PREDICATES_LIBRARY, ["enum"]),
+            static_access(PREDICATES_LIBRARY_ID, ["enum"]),
             Term::Array(
                 Array::new(
                     value
@@ -164,7 +164,7 @@ impl From<&[Value]> for Predicate {
 impl From<&Value> for Predicate {
     fn from(value: &Value) -> Self {
         Term::App(
-            static_access(PREDICATES_LIBRARY, ["const"]),
+            static_access(PREDICATES_LIBRARY_ID, ["const"]),
             serde_json::from_value(value.clone()).unwrap(),
         )
         .into()
@@ -183,7 +183,7 @@ fn mk_all_of(preds: impl IntoIterator<Item = Predicate>) -> Predicate {
             // reconstruct the full iterator
             let ps = iter::once(p1).chain(iter::once(p2)).chain(ps);
             mk_app!(
-                static_access(PREDICATES_LIBRARY, ["allOf"]),
+                static_access(PREDICATES_LIBRARY_ID, ["allOf"]),
                 Term::Array(Array::from_iter(ps.map(RichTerm::from)), Default::default())
             )
             .into()
@@ -203,7 +203,7 @@ fn mk_any_of(preds: impl IntoIterator<Item = Predicate>) -> Predicate {
             // reconstruct the full iterator
             let ps = iter::once(p1).chain(iter::once(p2)).chain(ps);
             mk_app!(
-                static_access(PREDICATES_LIBRARY, ["anyOf"]),
+                static_access(PREDICATES_LIBRARY_ID, ["anyOf"]),
                 Term::Array(Array::from_iter(ps.map(RichTerm::from)), Default::default())
             )
             .into()
@@ -237,7 +237,7 @@ impl AsPredicates for SubschemaValidation {
             .as_deref()
             .map(|schemas| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["oneOf"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["oneOf"]),
                     Term::Array(
                         Array::new(
                             schemas
@@ -256,7 +256,7 @@ impl AsPredicates for SubschemaValidation {
             .as_deref()
             .map(|s| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["not"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["not"]),
                     s.as_predicate(refs_usage)
                 )
                 .into()
@@ -267,7 +267,7 @@ impl AsPredicates for SubschemaValidation {
             .as_deref()
             .map(move |if_schema| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["ifThenElse"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["ifThenElse"]),
                     if_schema.as_predicate(refs_usage),
                     or_always(then_schema.as_deref(), refs_usage),
                     or_always(else_schema.as_deref(), refs_usage)
@@ -300,7 +300,7 @@ impl From<&NumberValidation> for Predicates {
         fn predicate(s: &str) -> impl '_ + FnOnce(f64) -> Predicate {
             move |n| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["numbers", s]),
+                    static_access(PREDICATES_LIBRARY_ID, ["numbers", s]),
                     Term::Num(Number::try_from_float_simplest(n).unwrap())
                 )
                 .into()
@@ -339,7 +339,7 @@ impl From<&StringValidation> for Predicates {
         let max_length = max_length
             .map(|n| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["strings", "maxLength"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["strings", "maxLength"]),
                     Term::Num(n.into())
                 )
                 .into()
@@ -349,7 +349,7 @@ impl From<&StringValidation> for Predicates {
         let min_length = min_length
             .map(|n| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["strings", "minLength"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["strings", "minLength"]),
                     Term::Num(n.into())
                 )
                 .into()
@@ -360,7 +360,7 @@ impl From<&StringValidation> for Predicates {
             .as_deref()
             .map(|s| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["strings", "pattern"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["strings", "pattern"]),
                     make::string(s)
                 )
                 .into()
@@ -385,14 +385,14 @@ impl AsPredicates for ArrayValidation {
         let items = match items {
             None => vec![],
             Some(SingleOrVec::Single(s)) => vec![mk_app!(
-                static_access(PREDICATES_LIBRARY, ["arrays", "arrayOf"]),
+                static_access(PREDICATES_LIBRARY_ID, ["arrays", "arrayOf"]),
                 s.as_predicate(refs_usage)
             )
             .into()],
             Some(SingleOrVec::Vec(schemas)) => {
                 let len = schemas.len();
                 [mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["arrays", "items"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["arrays", "items"]),
                     Term::Array(
                         Array::new(
                             schemas
@@ -407,7 +407,7 @@ impl AsPredicates for ArrayValidation {
                 .into_iter()
                 .chain(additional_items.as_deref().map(|s| {
                     mk_app!(
-                        static_access(PREDICATES_LIBRARY, ["arrays", "additionalItems"]),
+                        static_access(PREDICATES_LIBRARY_ID, ["arrays", "additionalItems"]),
                         s.as_predicate(refs_usage),
                         Term::Num(len.into())
                     )
@@ -421,7 +421,7 @@ impl AsPredicates for ArrayValidation {
         let max_items = max_items
             .map(|n| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["arrays", "maxItems"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["arrays", "maxItems"]),
                     Term::Num(n.into())
                 )
                 .into()
@@ -431,7 +431,7 @@ impl AsPredicates for ArrayValidation {
         let min_items = min_items
             .map(|n| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["arrays", "minItems"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["arrays", "minItems"]),
                     Term::Num(n.into())
                 )
                 .into()
@@ -440,8 +440,9 @@ impl AsPredicates for ArrayValidation {
 
         let unique_items = unique_items
             .and_then(|unique| {
-                unique
-                    .then_some(static_access(PREDICATES_LIBRARY, ["arrays", "uniqueItems"]).into())
+                unique.then_some(
+                    static_access(PREDICATES_LIBRARY_ID, ["arrays", "uniqueItems"]).into(),
+                )
             })
             .into_iter();
 
@@ -449,7 +450,7 @@ impl AsPredicates for ArrayValidation {
             .as_deref()
             .map(|s| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["arrays", "contains"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["arrays", "contains"]),
                     s.as_predicate(refs_usage)
                 )
                 .into()
@@ -482,7 +483,7 @@ impl AsPredicates for ObjectValidation {
         let max_properties = max_properties
             .map(|n| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["records", "maxProperties"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["records", "maxProperties"]),
                     Term::Num(n.into())
                 )
                 .into()
@@ -492,7 +493,7 @@ impl AsPredicates for ObjectValidation {
         let min_properties = min_properties
             .map(|n| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["records", "minProperties"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["records", "minProperties"]),
                     Term::Num(n.into())
                 )
                 .into()
@@ -503,7 +504,7 @@ impl AsPredicates for ObjectValidation {
             .as_deref()
             .map(|s| {
                 mk_app!(
-                    static_access(PREDICATES_LIBRARY, ["records", "propertyNames"]),
+                    static_access(PREDICATES_LIBRARY_ID, ["records", "propertyNames"]),
                     s.as_predicate(refs_usage)
                 )
                 .into()
@@ -516,7 +517,7 @@ impl AsPredicates for ObjectValidation {
             } else {
                 Some(
                     mk_app!(
-                        static_access(PREDICATES_LIBRARY, ["records", "required"]),
+                        static_access(PREDICATES_LIBRARY_ID, ["records", "required"]),
                         Term::Array(
                             Array::new(required.iter().map(make::string).collect()),
                             Default::default()
@@ -529,7 +530,7 @@ impl AsPredicates for ObjectValidation {
         .into_iter();
 
         let record = [mk_app!(
-            static_access(PREDICATES_LIBRARY, ["records", "record"]),
+            static_access(PREDICATES_LIBRARY_ID, ["records", "record"]),
             Term::Record(RecordData::with_field_values(
                 properties
                     .iter()
@@ -571,7 +572,7 @@ fn dependencies(
         .and_then(|v| v.as_object())
         .map(|deps| {
             mk_app!(
-                static_access(PREDICATES_LIBRARY, ["records", "dependencies"]),
+                static_access(PREDICATES_LIBRARY_ID, ["records", "dependencies"]),
                 Term::Record(RecordData::with_field_values(
                     deps.into_iter()
                         .map(|(key, value)| (
@@ -662,7 +663,7 @@ impl AsPredicate for Schema {
     fn as_predicate(&self, refs_usage: &mut RefsUsage) -> Predicate {
         match self {
             Schema::Bool(true) => Predicate::always(),
-            Schema::Bool(false) => static_access(PREDICATES_LIBRARY, ["never"]).into(),
+            Schema::Bool(false) => static_access(PREDICATES_LIBRARY_ID, ["never"]).into(),
             Schema::Object(o) => o.as_predicate(refs_usage),
         }
     }

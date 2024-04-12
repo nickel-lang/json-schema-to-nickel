@@ -47,7 +47,7 @@ use crate::{
     contracts::{Contract, Documentation},
     predicates::Predicate,
     utils::{decode_json_ptr_part, static_access},
-    DEFINITIONS_MANGLED, ENVIRONMENT_MANGLED, PROPS_PREDICATES_MANGLED,
+    DEFINITIONS_ID, ENVIRONMENT_ID, PROPS_PREDICATES_ID,
 };
 
 /// Specify if a reference is used in a context which requires a contract or a predicate.
@@ -304,8 +304,8 @@ pub fn resolve_ref(reference: &str, state: &mut RefsUsage, usage: RefUsage) -> R
                     // as a separator as a key. See the documentation of `PROPS_PREDICATES_MANGLED`
                     // for more information.
                     static_access(
-                        ENVIRONMENT_MANGLED,
-                        [PROPS_PREDICATES_MANGLED, field_path.path.join("/").as_str()],
+                        ENVIRONMENT_ID,
+                        [PROPS_PREDICATES_ID, field_path.path.join("/").as_str()],
                     )
                 }
             }
@@ -313,16 +313,13 @@ pub fn resolve_ref(reference: &str, state: &mut RefsUsage, usage: RefUsage) -> R
             match usage {
                 RefUsage::Contract => {
                     state.defs_contracts.insert(name.clone());
-                    static_access(
-                        ENVIRONMENT_MANGLED,
-                        [DEFINITIONS_MANGLED, "contracts", name.as_ref()],
-                    )
+                    static_access(ENVIRONMENT_ID, [DEFINITIONS_ID, "contracts", name.as_ref()])
                 }
                 RefUsage::Predicate => {
                     state.defs_predicates.insert(name.clone());
                     static_access(
-                        ENVIRONMENT_MANGLED,
-                        [DEFINITIONS_MANGLED, "predicates", name.as_ref()],
+                        ENVIRONMENT_ID,
+                        [DEFINITIONS_ID, "predicates", name.as_ref()],
                     )
                 }
             }
@@ -499,15 +496,15 @@ impl Environment {
         // The enclosing record, with one field for the definitions and one for the properties
         let global_env = Term::Record(RecordData::with_field_values(
             [
-                (Ident::from(DEFINITIONS_MANGLED), defs),
-                (Ident::from(PROPS_PREDICATES_MANGLED), props),
+                (Ident::from(DEFINITIONS_ID), defs),
+                (Ident::from(PROPS_PREDICATES_ID), props),
             ]
             .into_iter()
             .collect(),
         ));
 
         Term::Let(
-            Ident::from(ENVIRONMENT_MANGLED),
+            Ident::from(ENVIRONMENT_ID),
             global_env.into(),
             inner,
             LetAttrs {
