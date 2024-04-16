@@ -29,8 +29,8 @@ use stringreader::StringReader;
     "optional_ecmascript_regex_.*",
     "refRemote_.*", // no.
     // TODO: make reference handling robust
-    // The following are references that aren't yet handled by js2n (remote URIs, ref to something
-    // else than properties or definitions, etc.)
+    // The following are references that aren't yet handled by js2n (remote URIs, local files
+    // and non-top level definitions)
     "ref_0_3.*", // reference to the whole schema `#` not yet supported
     "ref_12_1.*", // reference to bare URI `node` (no fragment, no leading slash). Should fail
                   // because invalid, but js2n replace that by a `Dyn` contract
@@ -46,9 +46,9 @@ use stringreader::StringReader;
     "ref_27_1.*", // urn:uuid URI scheme not supported,
     "ref_28_0.*", // external reference (remote URI)
     "ref_29_0.*", // external reference (remote URI)
-    "ref_2_1.*", // internal ref to an array element (#/items/0)
     "ref_30_0.*", // external reference (remote URI)
     "ref_31_1.*", // external reference (absolute path /absref/foobar.json)
+    "ref_34_0.*", // non top-level definition ("#/definitions//definitions/")
     "ref_34_1.*", // non top-level definition ("#/definitions//definitions/")
     "ref_3_5.*", // schemars doesn't properly percent-decode URIs
     "ref_5_1.*", // not related to external ref, but js2n doesn't properly ignore other components

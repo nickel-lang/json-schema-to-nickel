@@ -36,38 +36,18 @@ use schemars::schema::RootSchema;
 
 /// The top-level variable storing the json-schema-to-nickel predicate library included by default
 /// in any generated contract.
-pub const PREDICATES_LIBRARY_ID: &str = "_js2n___nickel_preds_lib";
+// It would have been nice to do compile-time concatenation instead of inlining MANGLING_PREFIX,
+// but Rust's stdlib doesn't support it, and it's not worth pulling a dependency just for that.
+pub const PREDICATES_LIBRARY_ID: &str = "_js2n__-prdslib";
 
 /// The top-level variable storing the environment, that is the definitions and the properties
-/// referenced in the JSON schema (through the `$ref`) attribute. This variable stores
-/// [DEFINITIONS_ID] and [PROPS_PREDICATES_ID], each in their own field.
-///
-/// We put both under the same variable so that definitions and properties are accessible from
-/// everywhere, including from other definitions and properties (in fact, we would like to have
-/// mutual recursive let definitions for [DEFINITIONS_ID] and [PROPS_PREDICATES_ID], but
-/// Nickel doesn't have mutually recursive lets, so we put both in a recursive record instead).
-pub const ENVIRONMENT_ID: &str = "_js2n___nickel_global_env";
+/// referenced in the JSON schema (through the `$ref`) attribute.
+pub const ENVIRONMENT_ID: &str = "_js2n__-refsenv";
 
-/// The name of the special variable introduced by json-schema-to-nickel in the final contract
-/// which holds the predicates and the contracts corresponding to the definitions of the schema.
-/// The name is long and specific on purpose as it could clash with existing variable in the
-/// schema.
-///
-/// This Nickel variable is expected to have the type
-/// `{_ : {predicate: _, contract: _}}` where field names correspond to the top-level
-/// definitions in the schema.
-pub const DEFINITIONS_ID: &str = "_js2n___nickel_defs";
-
-/// Same as [DEFINITIONS_ID] but for the predicates corresponding to properties of the schema.
-///
-/// This Nickel variable is expected to have the type `{_ : Dyn -> Bool}` where predicates are
-/// directly stored without further indirection, as opposed to [DEFINITIONS_ID]. Indeed, we don't
-/// need the contract part, which can be accessed directly from within the final schema.
-///
-/// Properties can be nested, so we might need to store both a predicate for `foo` and for
-/// `foo.bar.baz`. To make this work, we store the predicates in a flat dictionary, where the keys
-/// are complete paths using `/` as a separator (to avoid confusion with Nickel field path).
-pub const PROPS_PREDICATES_ID: &str = "_js2n___nickel_prop_preds";
+/// Mangling prefix used to lower the risk of having clash between variables introduced by
+/// json-schema-to-nickel and actual JSON schema components. This prefix is used in particular to
+/// give (hopefully) unique names to reference pointees appearing in the references environment.
+pub const MANGLING_PREFIX: &str = "_js2n__-";
 
 /// Convert a [`RootSchema`] into a Nickel contract. If the JSON schema is
 /// representable as a lazy record contract, this conversion is preferred.
