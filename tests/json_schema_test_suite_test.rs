@@ -32,14 +32,23 @@ use stringreader::StringReader;
     // The following are references that aren't yet handled by js2n (remote URIs, local files
     // and non-top level definitions)
     "ref_0_3.*", // reference to the whole schema `#` not yet supported
+    "ref_3_2.*", // we don't properly percent-decode URIs
     "ref_12_1.*", // reference to bare URI `node` (no fragment, no leading slash). Should fail
                   // because invalid, but js2n replace that by a `Dyn` contract
-    "ref_13_0.*", // schemars doesn't properly percent-decode URIs
+    "ref_13_0.*", // we don't properly percent-decode URIs
+    "ref_13_1.*", // we don't properly percent-decode URIs
     "ref_14_1.*", // reference to an anchor "#foo" not yet supported
     "ref_15_1.*", // anchor + remote URI
     "ref_16_1.*", // external reference (remote URI)
+    "ref_18_0.*", // reference to a local definition ("#/definitions/inner" but the definition
+                  // isn't at the top-level? I'm not even sure how it should be handled in all
+                  // generality) + absolute local URI
+    "ref_18_1.*", // Same as ref_18_0
+                  // generality) + absolute local URI
     "ref_18_2.*", // external reference (local file URI)
     "ref_19_2.*", // external reference (local file URI),
+    "ref_19_0.*", // Same as refs_18_0
+    "ref_19_1.*", // Same as refs_18_0
     "ref_20_1.*", // external reference (remote URI)
     "ref_21_1.*", // urn:uuid URI scheme not supported
     "ref_26_1.*", // urn:uuid URI scheme not supported

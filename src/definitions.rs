@@ -58,6 +58,17 @@ pub enum RefUsageContext {
     Predicate,
 }
 
+impl RefUsageContext {
+    /// Generate a default conversion for the given usage, when the reference can't be found, can't
+    /// be supported, etc. For contracts, it's the `Dyn` contract, and the always true predicate.
+    pub fn default_term(&self) -> RichTerm {
+        match self {
+            RefUsageContext::Contract => Contract::dynamic().into(),
+            RefUsageContext::Predicate => Predicate::always().into(),
+        }
+    }
+}
+
 impl std::fmt::Display for RefUsageContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -147,6 +158,9 @@ impl SchemaPointer {
                     it.next()
                         .ok_or(SchemaPointerParseError::MissingIndex(keyword))?,
                 )),
+                "additionalProperties" => {
+                    path.push(SchemaPointerElt::AdditionalProperties);
+                }
                 "items" => {
                     if let Ok(index) = parse_array_idx(keyword, it.peek().cloned()) {
                         // Actually consume the token we've peeked at
@@ -306,6 +320,13 @@ impl SchemaPointer {
                     .properties
                     .get(prop)
                     .map(CurrentSchema::Schema),
+                SchemaPointerElt::AdditionalProperties => current
+                    .object()?
+                    .object
+                    .as_ref()?
+                    .additional_properties
+                    .as_ref()
+                    .map(|s| CurrentSchema::Schema(s.as_ref())),
                 SchemaPointerElt::ItemsIndexed(index) => {
                     match current.object()?.array.as_ref()?.items.as_ref() {
                         Some(SingleOrVec::Vec(vec)) => {
@@ -412,6 +433,7 @@ impl std::fmt::Display for SchemaPointer {
 pub enum SchemaPointerElt {
     Definitions(String),
     Properties(String),
+    AdditionalProperties,
     /// An `items` followed by an array index.
     ///
     /// In a JSON Schema, `items` might be either a single schema or an array of schemas. In the
@@ -437,6 +459,7 @@ impl std::fmt::Display for SchemaPointerElt {
         match self {
             SchemaPointerElt::Definitions(name) => write!(f, "definitions/{name}"),
             SchemaPointerElt::Properties(name) => write!(f, "properties/{name}"),
+            SchemaPointerElt::AdditionalProperties => write!(f, "additionalProperties"),
             SchemaPointerElt::ItemsIndexed(index) => write!(f, "items/{index}"),
             SchemaPointerElt::ItemsSingle => write!(f, "items"),
             SchemaPointerElt::Contains => write!(f, "contains"),
@@ -584,11 +607,6 @@ pub fn resolve_ref(
     refs_usage: &mut RefsUsage,
     usage: RefUsageContext,
 ) -> RichTerm {
-    let mk_default = || match usage {
-        RefUsageContext::Contract => Contract::dynamic().into(),
-        RefUsageContext::Predicate => Predicate::always().into(),
-    };
-
     if let Some(fragment) = reference.strip_prefix("#/") {
         let schema_ptr = match SchemaPointer::parse(fragment) {
             Ok(ptr) => ptr,
@@ -597,7 +615,8 @@ pub fn resolve_ref(
                     "Warning: skipping external reference {reference} (replaced by an always \
                     succeeding contract). {err}"
                 );
-                return mk_default();
+
+                return usage.default_term();
             }
         };
 
@@ -610,7 +629,8 @@ pub fn resolve_ref(
             contract). The current version of json-schema-to-nickel only supports internal \
             JSON pointer references"
         );
-        mk_default()
+
+        usage.default_term()
     }
 }
 
@@ -654,22 +674,30 @@ impl Environment {
             .collect();
 
         while let Some((schema_ptr, usage)) = ref_stack.pop() {
-            let Some(schema) = schema_ptr.resolve(root_schema) else {
-                eprintln!(
-                    "Warning: definition `{schema_ptr}` is referenced in the schema but couldn't be found"
-                );
-                continue;
-            };
-
             let mut new_refs_usage = RefsUsage::new();
-            let doc = Documentation::try_from(schema).ok();
 
-            let term = match usage {
-                RefUsageContext::Contract => schema
-                    .try_as_contract(&mut new_refs_usage)
-                    .unwrap_or_else(|| schema.as_predicate_contract(&mut new_refs_usage))
-                    .into(),
-                RefUsageContext::Predicate => schema.as_predicate(&mut new_refs_usage).into(),
+            let (doc, term) = {
+                if let Some(schema) = schema_ptr.resolve(root_schema) {
+                    let doc = Documentation::try_from(schema).ok();
+
+                    let term = match usage {
+                        RefUsageContext::Contract => schema
+                            .try_as_contract(&mut new_refs_usage)
+                            .unwrap_or_else(|| schema.as_predicate_contract(&mut new_refs_usage))
+                            .into(),
+                        RefUsageContext::Predicate => {
+                            schema.as_predicate(&mut new_refs_usage).into()
+                        }
+                    };
+
+                    (doc, term)
+                } else {
+                    eprintln!(
+                    "Warning: definition `{schema_ptr}` is referenced in the schema but couldn't be found. Replaced with an always succeeding contract."
+                    );
+
+                    (None, usage.default_term())
+                }
             };
 
             references.push(ConvertedRef {
