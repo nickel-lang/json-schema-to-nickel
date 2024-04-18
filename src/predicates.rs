@@ -6,7 +6,7 @@
 //!
 //! The drawback is that the resulting Nickel contracts are eager (they don't preserve lazyness)
 //! and are less LSP-friendly.
-use crate::definitions::RefUsage;
+use crate::definitions::RefUsageContext;
 use std::{collections::BTreeMap, iter};
 
 use nickel_lang_core::{
@@ -645,7 +645,11 @@ impl AsPredicate for SchemaObject {
         );
 
         args.extend(reference.as_deref().map(|r| {
-            Predicate::from(definitions::resolve_ref(r, refs_usage, RefUsage::Predicate))
+            Predicate::from(definitions::resolve_ref(
+                r,
+                refs_usage,
+                RefUsageContext::Predicate,
+            ))
         }));
 
         args.extend(

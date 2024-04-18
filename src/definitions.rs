@@ -30,9 +30,10 @@
 //! At the end, we can elaborate the required special values like `___nickel_defs` and only include
 //! the actually used in the final contract, to avoid bloating the result.
 
+use crate::contracts::AsPredicateContract;
 use crate::{contracts::TryAsContract, predicates::AsPredicate};
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use schemars::schema::SingleOrVec;
+use std::collections::HashSet;
 
 use nickel_lang_core::{
     identifier::Ident,
@@ -47,14 +48,23 @@ use crate::{
     contracts::{Contract, Documentation},
     predicates::Predicate,
     utils::{decode_json_ptr_part, static_access},
-    DEFINITIONS_ID, ENVIRONMENT_ID, PROPS_PREDICATES_ID,
+    ENVIRONMENT_ID, MANGLING_PREFIX,
 };
 
 /// Specify if a reference is used in a context which requires a contract or a predicate.
 #[derive(Clone, Debug, Copy)]
-pub enum RefUsage {
+pub enum RefUsageContext {
     Contract,
     Predicate,
+}
+
+impl std::fmt::Display for RefUsageContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RefUsageContext::Contract => write!(f, "contract"),
+            RefUsageContext::Predicate => write!(f, "predicate"),
+        }
+    }
 }
 
 /// A representation of a field path in the final generated contract.
@@ -62,7 +72,7 @@ pub enum RefUsage {
 /// # Invariants
 ///
 /// The path is guaranteed to be non-empty by construction. Do not directly mutate the underlying
-/// path with the risk of making it empty.
+/// path at the risk of making it empty.
 #[derive(Hash, Clone, Debug, Default)]
 pub struct FieldPath {
     path: Vec<String>,
@@ -92,114 +102,391 @@ impl From<FieldPath> for RichTerm {
     }
 }
 
-/// A representation of JSON pointer, which is mostly a path within a JSON document toward a
-/// specific value. See [JSON pointer](https://datatracker.ietf.org/doc/html/rfc6901).
-#[derive(Hash, Clone, Debug, Default)]
-pub struct JsonPointer {
-    pub path: Vec<String>,
+/// A representation of a [JSON pointer](https://datatracker.ietf.org/doc/html/rfc6901) inside a
+/// JSON Schema. This type is more structured that a generic JSON pointer, as it matches the
+/// specific and constrained structure of a JSON Schema.
+///
+/// For example, a JSON Schema reference `#/properties/foo/contains/items/0/allOf/5` will be parsed
+/// as a [SchemaPointer] of the form `[Properties("foo"), Contains, Items(0), allOf(5)]`.
+#[derive(Hash, Clone, Debug, Default, Eq, PartialEq)]
+pub struct SchemaPointer {
+    pub path: Vec<SchemaPointerElt>,
 }
 
-impl JsonPointer {
-    /// Create a new JSON pointer from a string representation (valid according to RFC6901).
-    pub fn new(ptr: &str) -> Self {
-        Self {
-            path: ptr.split('/').map(decode_json_ptr_part).collect(),
+impl SchemaPointer {
+    /// Parse a string representation of a JSON pointer as a schema pointer.
+    pub fn parse(json_ptr: &str) -> Result<Self, SchemaPointerParseError> {
+        fn parse_array_idx(
+            keyword: String,
+            index_str: Option<String>,
+        ) -> Result<usize, SchemaPointerParseError> {
+            let index_str =
+                index_str.ok_or_else(|| SchemaPointerParseError::MissingIndex(keyword.clone()))?;
+
+            let index: usize =
+                index_str
+                    .parse()
+                    .map_err(|_| SchemaPointerParseError::InvalidArrayIndex {
+                        keyword,
+                        index: index_str,
+                    })?;
+
+            Ok(index)
         }
+
+        let mut path = Vec::new();
+        let mut it = json_ptr.split('/').map(decode_json_ptr_part);
+
+        while let Some(keyword) = it.next() {
+            match keyword.as_ref() {
+                "definitions" => path.push(SchemaPointerElt::Definitions(
+                    it.next()
+                        .ok_or(SchemaPointerParseError::MissingIndex(keyword))?,
+                )),
+                "properties" => path.push(SchemaPointerElt::Properties(
+                    it.next()
+                        .ok_or(SchemaPointerParseError::MissingIndex(keyword))?,
+                )),
+                "items" => {
+                    path.push(SchemaPointerElt::Items(parse_array_idx(
+                        keyword,
+                        it.next(),
+                    )?));
+                }
+                "contains" => {
+                    path.push(SchemaPointerElt::Contains);
+                }
+                "allOf" => {
+                    path.push(SchemaPointerElt::AllOf(parse_array_idx(
+                        keyword,
+                        it.next(),
+                    )?));
+                }
+                "anyOf" => {
+                    path.push(SchemaPointerElt::AnyOf(parse_array_idx(
+                        keyword,
+                        it.next(),
+                    )?));
+                }
+                "oneOf" => {
+                    path.push(SchemaPointerElt::OneOf(parse_array_idx(
+                        keyword,
+                        it.next(),
+                    )?));
+                }
+                "not" => {
+                    path.push(SchemaPointerElt::Not);
+                }
+                "then" => {
+                    path.push(SchemaPointerElt::Then);
+                }
+                "else" => {
+                    path.push(SchemaPointerElt::Else);
+                }
+                _ => return Err(SchemaPointerParseError::UnsupportedKeyword(keyword)),
+            }
+        }
+
+        Ok(SchemaPointer { path })
     }
 
-    /// Take a JSON pointer to a property and return the corresponding path in the final
-    /// generated contract, that is, with all the intermediate `properties` stripped.
+    /// Takes a schema pointer whose path is comprised only of properties and returns the
+    /// corresponding path in the final generated contract, that is the sequence of property's
+    /// names with all the intermediate `/properties` stripped.
     ///
-    /// For example, running [Self::try_as_field_path] on a JSON pointer
-    /// `/properties/foo/properties/bar` will return the field path `["foo", "bar"]`.
-    fn try_as_field_path(&self) -> Option<FieldPath> {
-        let mut it = self.path.iter();
-        let mut result = Vec::with_capacity(self.path.len() / 2);
+    /// # Example
+    ///
+    /// Running [Self::try_as_field_path] on a schema pointer `/properties/foo/properties/bar` will
+    /// return the field path `["foo", "bar"]`.
+    ///
+    /// # Return values
+    ///
+    /// If the path is empty or isn't composed only of properties, this method returns `None`.
+    pub fn try_as_field_path(&self) -> Option<FieldPath> {
+        let stripped: Option<Vec<_>> = self
+            .path
+            .iter()
+            .map(|elt| match elt {
+                SchemaPointerElt::Properties(name) => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
 
-        // We expect that the path can be grouped as a sequence of two elements, where the first
-        // one is always `properties`, and the second one corresponds to the property name.
-        while let Some(part) = it.next() {
-            if part != "properties" {
-                return None;
-            }
+        FieldPath::try_from(stripped?).ok()
+    }
 
-            if let Some(name) = it.next() {
-                result.push(name.clone());
-            } else {
-                return None;
+    /// Returns a Nickel term that accesses the value pointed by `self` by looking it up either in
+    /// the references environment or directly in the final contract for pure property paths.
+    pub fn access(&self, usage: RefUsageContext) -> RichTerm {
+        match (self.try_as_field_path(), usage) {
+            // The case of pure property paths is special, as we access them directly from within
+            // the final contract, instead of looking them up in the references environment.
+            (Some(field_path), RefUsageContext::Contract) => field_path.into(),
+            _ => static_access(ENVIRONMENT_ID, [self.nickel_uid(usage).as_str()]),
+        }
+    }
+
+    /// Returns a single mangled string uniquely identifying this pointer and its usage. This name
+    /// is used to store the reference in (and load it from) the references environment.
+    pub fn nickel_uid(&self, usage: RefUsageContext) -> String {
+        let path = self
+            .path
+            .iter()
+            .map(|elt| elt.to_string())
+            .collect::<Vec<_>>()
+            .join("/");
+
+        format!("{MANGLING_PREFIX}:{path}!{usage}")
+    }
+
+    /// Returns `true` if the path is composed only of properties.
+    pub fn is_only_props(&self) -> bool {
+        self.path
+            .iter()
+            .all(|elt| matches!(elt, SchemaPointerElt::Properties(_)))
+    }
+
+    /// Returns the subschema pointed to by `self` in the given schema object.
+    ///
+    /// # Return values
+    ///
+    /// - Returns `Some(subschema)` if the path exists in the schema and points to `subschema`.
+    /// - Returns `None` if the path does not exist in the schema or the path is empty.
+    ///
+    /// Note: it looks like we could return the original value upon empty path, but there's a type
+    /// mismatch: we get a `SchemaObject` reference, and we must return a `Schema` reference. We
+    /// can't convert between the two (we can convert between the owned variants easily, but not
+    /// for references). Since we can special case empty paths before calling [Self::resolve] if
+    /// really needed, it's simpler to just return `None` here.
+    pub fn resolve<'a>(&self, root_schema: &'a RootSchema) -> Option<&'a Schema> {
+        enum CurrentSchema<'a> {
+            Schema(&'a Schema),
+            Root(&'a RootSchema),
+        }
+
+        impl<'a> CurrentSchema<'a> {
+            fn object<'b>(&'b self) -> Option<&'a SchemaObject> {
+                match self {
+                    CurrentSchema::Schema(Schema::Object(obj)) => Some(obj),
+                    CurrentSchema::Schema(Schema::Bool(_)) => None,
+                    CurrentSchema::Root(root) => Some(&root.schema),
+                }
             }
         }
 
-        FieldPath::try_from(result).ok()
-    }
+        fn warn_if_out_of_bounds<T>(vec: &[T], index: usize, keyword: &str) {
+            if index >= vec.len() {
+                eprintln!(
+                    "Warning: out-of-bounds array access `{keyword}/{index}` in a reference. \
+                    {keyword} has only {} element(s)",
+                    vec.len()
+                );
+            }
+        }
 
-    /// Tries to interpret `self` as pointing to a top-level definition. A JSON pointer points to a
-    /// top-level definition if the path has exactly two elements and the first one is
-    /// `definitions`.
-    fn try_as_def(&self) -> Option<String> {
-        if self.path.len() == 2 && self.path[0] == "definitions" {
-            Some(self.path[1].clone())
+        let mut current = CurrentSchema::Root(root_schema);
+
+        for elt in self.path.iter() {
+            let new = match elt {
+                SchemaPointerElt::Definitions(name) => {
+                    if let CurrentSchema::Root(root) = current {
+                        root.definitions.get(name).map(CurrentSchema::Schema)
+                    } else {
+                        eprintln!("Warning: couldn't access nested definition `{name}`. json-schema-to-nickel only supports references to top-level definitions");
+                        None
+                    }
+                }
+                SchemaPointerElt::Properties(prop) => current
+                    .object()?
+                    .object
+                    .as_ref()?
+                    .properties
+                    .get(prop)
+                    .map(CurrentSchema::Schema),
+                SchemaPointerElt::Items(index) => {
+                    match current.object()?.array.as_ref()?.items.as_ref() {
+                        Some(SingleOrVec::Single(sub)) => {
+                            warn_if_out_of_bounds(&[sub.as_ref()], *index, "items");
+
+                            if *index == 0 {
+                                Some(CurrentSchema::Schema(sub.as_ref()))
+                            } else {
+                                None
+                            }
+                        }
+                        Some(SingleOrVec::Vec(vec)) => {
+                            warn_if_out_of_bounds(vec, *index, "items");
+                            vec.get(*index).map(CurrentSchema::Schema)
+                        }
+                        None => None,
+                    }
+                }
+                SchemaPointerElt::Contains => Some(CurrentSchema::Schema(
+                    current.object()?.array.as_ref()?.contains.as_ref()?,
+                )),
+                SchemaPointerElt::AllOf(index) => {
+                    let all_of = current.object()?.subschemas.as_ref()?.all_of.as_ref()?;
+                    warn_if_out_of_bounds(all_of, *index, "allOf");
+                    all_of.get(*index).map(CurrentSchema::Schema)
+                }
+                SchemaPointerElt::AnyOf(index) => {
+                    let any_of = current.object()?.subschemas.as_ref()?.any_of.as_ref()?;
+                    warn_if_out_of_bounds(any_of, *index, "anyOf");
+                    any_of.get(*index).map(CurrentSchema::Schema)
+                }
+                SchemaPointerElt::OneOf(index) => {
+                    let one_of = current.object()?.subschemas.as_ref()?.one_of.as_ref()?;
+                    warn_if_out_of_bounds(one_of, *index, "oneOf");
+                    one_of.get(*index).map(CurrentSchema::Schema)
+                }
+                SchemaPointerElt::Not => current
+                    .object()?
+                    .subschemas
+                    .as_ref()?
+                    .not
+                    .as_ref()
+                    .map(|s| CurrentSchema::Schema(s)),
+                SchemaPointerElt::Then => current
+                    .object()?
+                    .subschemas
+                    .as_ref()?
+                    .then_schema
+                    .as_ref()
+                    .map(|s| CurrentSchema::Schema(s)),
+                SchemaPointerElt::Else => current
+                    .object()?
+                    .subschemas
+                    .as_ref()?
+                    .else_schema
+                    .as_ref()
+                    .map(|s| CurrentSchema::Schema(s.as_ref())),
+            }?;
+
+            current = new;
+        }
+
+        if let CurrentSchema::Schema(current) = current {
+            Some(current)
         } else {
             None
         }
     }
 }
 
-/// The conversion of a JSON schema definition into a Nickel predicate and contract. We don't
-/// always use both, so we only store the part which is actually used.
+impl std::fmt::Display for SchemaPointer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for elt in self.path.iter() {
+            write!(f, "/{elt}")?;
+        }
+
+        Ok(())
+    }
+}
+
+/// Element of a JSON pointer supported by json-schema-to-nickel. A JSON Pointer is parsed as a
+/// sequence of [SchemaPointerElt] which locates a subschema within a JSON Schema. Each variant
+/// corresponds to a JSON schema keyword.
+///
+/// Keywords containing a single schema (such as `contains`) don't need any additional data.
+/// Keywords storing objects carries a string indicating which property of the object should be
+/// accessed (e.g. `properties/foo`). Keywords storing arrays carries the index of the array to
+/// access (e.g. `items/0`).
+///
+/// `prefixItems` is a JSON Schema keyword that could be supported as well but it's unfortunately
+/// not supported by `schemars`, so we ignore it.
+#[derive(Hash, Clone, Debug, Eq, PartialEq)]
+pub enum SchemaPointerElt {
+    Definitions(String),
+    Properties(String),
+    Items(usize),
+    Contains,
+    AllOf(usize),
+    AnyOf(usize),
+    OneOf(usize),
+    Not,
+    Then,
+    Else,
+}
+
+impl std::fmt::Display for SchemaPointerElt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SchemaPointerElt::Definitions(name) => write!(f, "definitions/{name}"),
+            SchemaPointerElt::Properties(name) => write!(f, "properties/{name}"),
+            SchemaPointerElt::Items(index) => write!(f, "items/{index}"),
+            SchemaPointerElt::Contains => write!(f, "contains"),
+            SchemaPointerElt::AllOf(index) => write!(f, "allOf/{index}"),
+            SchemaPointerElt::AnyOf(index) => write!(f, "anyOf/{index}"),
+            SchemaPointerElt::OneOf(index) => write!(f, "oneOf/{index}"),
+            SchemaPointerElt::Not => write!(f, "not"),
+            SchemaPointerElt::Then => write!(f, "then"),
+            SchemaPointerElt::Else => write!(f, "else"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SchemaPointerParseError {
+    /// An element of a JSON pointer, supposedly referring to a JSON Schema keyword, isn't
+    /// supported at the moment by json-schema-to-nickel (supported keyword are the variants of
+    /// [SchemaPointerElt]). As the standard of JSON Schema is evolving, we don't make a difference
+    /// between an unsupported keyword and an invalid one.
+    UnsupportedKeyword(String),
+    /// A JSON pointer keyword isn't properly followed by an index or a property name. For example
+    /// `#/properties/foo/items` or `#/items/0/property` are invalid (they are incomplete).
+    MissingIndex(String),
+    /// An index into an array is not a valid number. For example, `#/items/foo`.
+    InvalidArrayIndex { keyword: String, index: String },
+}
+
+impl std::fmt::Display for SchemaPointerParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SchemaPointerParseError::UnsupportedKeyword(keyword) => {
+                write!(f, "Unsupported JSON schema keyword `{keyword}`")
+            }
+            SchemaPointerParseError::MissingIndex(keyword) => {
+                write!(
+                    f,
+                    "`{keyword}` isn't properly followed by an index or the name of a property"
+                )
+            }
+            SchemaPointerParseError::InvalidArrayIndex { keyword, index } => {
+                write!(f, "`{keyword}` is an array which must be indexed by a number but is followed by `{index}`")
+            }
+        }
+    }
+}
+
+/// The conversion of a JSON schema reference pointee (a definition, a property, or any subschema
+/// really) into a Nickel predicate or contract.
 #[derive(Clone)]
-pub struct ConvertedDef {
+pub struct ConvertedRef {
+    /// The schema pointer leading to this reference.
+    pointer: SchemaPointer,
+    /// The usage context of the reference.
+    usage: RefUsageContext,
+    /// The documentation associated with the reference pointee.
     doc: Option<Documentation>,
-    predicate: Option<Predicate>,
-    contract: Option<Contract>,
+    /// The translation of the pointed schema into a Nickel term.
+    term: RichTerm,
 }
 
-impl ConvertedDef {
-    /// Take the contract part out of this definition and convert it to a record field with the
-    /// appropriate definition. This method returns `None` if `self.contract` is `None`.
-    ///
-    /// After calling this method, `self.contract` will be `None`.
-    pub fn contract_as_field(&mut self) -> Option<Field> {
-        Self::as_field(self.contract.take(), self.doc.clone())
-    }
-
-    /// Take the predicate part out of this definition and convert it to a record field with the
-    /// appropriate definition. This method returns `None` if `self.contract` is `None`.
-    ///
-    /// After calling this method, `self.predicate` will be `None`.
-    pub fn predicate_as_field(&mut self) -> Option<Field> {
-        Self::as_field(self.predicate.take(), self.doc.clone())
-    }
-
-    /// Helper including the logic common to `contract_as_field` and `predicate_as_field`.
-    fn as_field<V>(value: Option<V>, doc: Option<Documentation>) -> Option<Field>
-    where
-        V: Clone + Into<RichTerm>,
-    {
-        let value = value?.into();
-
-        Some(Field {
-            value: Some(value),
-            metadata: FieldMetadata {
-                doc: doc.map(String::from),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
+impl ConvertedRef {
+    /// Return this reference as a Nickel record binding as it appears in the references environment,
+    /// that is a pair of an identifier and a field value.
+    pub fn into_binding(self) -> (Ident, Field) {
+        (
+            Ident::from(self.pointer.nickel_uid(self.usage)),
+            self.into(),
+        )
     }
 }
 
-/// The conversion of a JSON schema property into a Nickel predicate.
-#[derive(Clone)]
-pub struct ConvertedProp {
-    doc: Option<Documentation>,
-    predicate: Predicate,
-}
-
-impl From<ConvertedProp> for Field {
-    fn from(value: ConvertedProp) -> Self {
+impl From<ConvertedRef> for Field {
+    fn from(value: ConvertedRef) -> Self {
         Field {
-            value: Some(value.predicate.into()),
+            value: Some(value.term),
             metadata: FieldMetadata {
                 doc: value.doc.map(String::from),
                 ..Default::default()
@@ -209,19 +496,13 @@ impl From<ConvertedProp> for Field {
     }
 }
 
-/// State recording which properties and definitions are actually used and how (as predicates or as
-/// contracts).
+/// State recording which references are actually used and how (as predicates or as contracts).
 #[derive(Clone, Default)]
 pub struct RefsUsage {
-    /// The definitions referenced as predicates somewhere in the schema.
-    pub defs_predicates: HashSet<String>,
-    /// The definitions referenced as contracts somewhere in the schema.
-    pub defs_contracts: HashSet<String>,
-    /// The properties referenced as predicates somewhere in the schema (stored as path).
-    ///
-    /// We don't need to keep track of the contracts, as they will unconditionally be constituents
-    /// of the final schema.
-    pub props_predicates: HashSet<Vec<String>>,
+    /// The references used as predicates somewhere in the schema.
+    pub predicates: HashSet<SchemaPointer>,
+    /// The references used as contracts somewhere in the schema (excluding properties).
+    pub contracts: HashSet<SchemaPointer>,
 }
 
 impl RefsUsage {
@@ -230,38 +511,35 @@ impl RefsUsage {
         Self::default()
     }
 
-    /// Return the set difference between all the definitions (either predicate or contract)
-    /// referenced in `self` and all the definitions referenced in `other`.
-    ///
-    /// That is, [Self::defs_diff] returns `(self.defs_predicates | self.defs_contracts) -
-    /// (other.defs_predicates | other.defs_contracts)`.
-    pub fn defs_diff(&self, other: &RefsUsage) -> HashSet<String> {
-        &(&self.defs_predicates | &self.defs_contracts)
-            - &(&other.defs_predicates | &other.defs_contracts)
+    /// Return the tuple of set difference between the predicates and the contracts referenced in
+    /// `self` and referenced in `other`.
+    pub fn diff(&self, other: &RefsUsage) -> RefsUsage {
+        RefsUsage {
+            predicates: &self.predicates - &other.predicates,
+            contracts: &self.contracts - &other.contracts,
+        }
     }
 
     /// Extend the usages of `self` with the usages of `other`.
     pub fn extend(&mut self, other: RefsUsage) {
-        self.defs_predicates.extend(other.defs_predicates);
-        self.defs_contracts.extend(other.defs_contracts);
-        self.props_predicates.extend(other.props_predicates);
+        self.predicates.extend(other.predicates);
+        self.contracts.extend(other.contracts);
     }
-}
 
-/// An environment of top level schema definitions and nested properties and their conversions into
-/// Nickel predicates and contracts.
-#[derive(Clone, Default)]
-pub struct Environment {
-    /// The top-level definition of the schema.
-    definitions: HashMap<String, ConvertedDef>,
-    /// The predicates of the properties of the schema. We only need to store the predicates, and
-    /// not the contracts, as the contracts are simply accessible recursively in the resulting
-    /// schema. For example, the contract for the reference `#/properties/foo/properties/bar` is
-    /// simply `foo.bar`.
-    ///
-    /// The key is the path to the property. In our previous example, the key would be `["foo",
-    /// "bar"]`.
-    property_preds: HashMap<Vec<String>, ConvertedProp>,
+    /// Record the usage of a JSON Schema reference.
+    pub fn record_usage(&mut self, reference: SchemaPointer, usage: RefUsageContext) {
+        // We don't record a contract usage of a property reference.
+        if !(reference.is_only_props() && matches!(usage, RefUsageContext::Contract)) {
+            match usage {
+                RefUsageContext::Contract => {
+                    self.contracts.insert(reference);
+                }
+                RefUsageContext::Predicate => {
+                    self.predicates.insert(reference);
+                }
+            }
+        }
+    }
 }
 
 /// Resolve a JSON schema reference to a Nickel term. The resulting Nickel expression will have a
@@ -270,65 +548,53 @@ pub struct Environment {
 ///
 /// # Arguments
 ///
-/// - `reference`: the JSON schema reference to resolve. It must be a valid URI
-/// - `state`: the state used to record which properties and definitions are actually used, and
-///   how. `resolve_ref` will update the state accordingly
+/// - `reference`: the JSON schema reference to resolve. It must be a valid URI. Currently only
+/// local references are supported (i.e. URI starting with `#/`).
+/// - `refs_usage`: the state used to record which references are actually used, and
+///   how. `resolve_ref` will record this usage accordingly
 /// - `usage`: the context in which the reference is used. Some contexts requires a predicate,
 ///   while other can do with a contract.
-pub fn resolve_ref(reference: &str, state: &mut RefsUsage, usage: RefUsage) -> RichTerm {
-    let unsupported_reference = || -> RichTerm {
-        eprintln!(
-            "
-            Warning: skipping reference {reference} (replaced by an always succeeding \
-            `Dyn` contract). The current version of `json-schema-to-nickel` only supports \
-            internal references to top-level definitions or nested properties"
-        );
-
-        match usage {
-            RefUsage::Contract => Contract::dynamic().into(),
-            RefUsage::Predicate => Predicate::always().into(),
-        }
+pub fn resolve_ref(
+    reference: &str,
+    refs_usage: &mut RefsUsage,
+    usage: RefUsageContext,
+) -> RichTerm {
+    let mk_default = || match usage {
+        RefUsageContext::Contract => Contract::dynamic().into(),
+        RefUsageContext::Predicate => Predicate::always().into(),
     };
 
     if let Some(fragment) = reference.strip_prefix("#/") {
-        let json_ptr = JsonPointer::new(fragment);
+        let schema_ptr = match SchemaPointer::parse(fragment) {
+            Ok(ptr) => ptr,
+            Err(err) => {
+                eprintln!(
+                    "Warning: skipping external reference {reference} (replaced by an always \
+                    succeeding contract). {err}"
+                );
+                return mk_default();
+            }
+        };
 
-        if let Some(field_path) = json_ptr.try_as_field_path() {
-            match usage {
-                RefUsage::Contract => RichTerm::from(field_path),
-                RefUsage::Predicate => {
-                    // If we are referring to a property as a predicate, we need to keep track of it.
-                    state.props_predicates.insert(field_path.path.clone());
-                    // We don't index the properties element by element, as in
-                    // `<PROPS_PREDICATES_MANGLED>.foo.bar.baz`, but we use the whole path with `/`
-                    // as a separator as a key. See the documentation of `PROPS_PREDICATES_MANGLED`
-                    // for more information.
-                    static_access(
-                        ENVIRONMENT_ID,
-                        [PROPS_PREDICATES_ID, field_path.path.join("/").as_str()],
-                    )
-                }
-            }
-        } else if let Some(name) = json_ptr.try_as_def() {
-            match usage {
-                RefUsage::Contract => {
-                    state.defs_contracts.insert(name.clone());
-                    static_access(ENVIRONMENT_ID, [DEFINITIONS_ID, "contracts", name.as_ref()])
-                }
-                RefUsage::Predicate => {
-                    state.defs_predicates.insert(name.clone());
-                    static_access(
-                        ENVIRONMENT_ID,
-                        [DEFINITIONS_ID, "predicates", name.as_ref()],
-                    )
-                }
-            }
-        } else {
-            unsupported_reference()
-        }
+        refs_usage.record_usage(schema_ptr.clone(), usage);
+        schema_ptr.access(usage)
     } else {
-        unsupported_reference()
+        eprintln!(
+            "
+            Warning: skipping external reference {reference} (replaced by an always succeeding \
+            contract). The current version of json-schema-to-nickel only supports internal \
+            JSON pointer references"
+        );
+        mk_default()
     }
+}
+
+/// An environment of all reference pointees and their conversions into Nickel predicates and
+/// contracts.
+#[derive(Clone, Default)]
+pub struct Environment {
+    /// The list of all references used in the schema.
+    references: Vec<ConvertedRef>,
 }
 
 impl Environment {
@@ -341,167 +607,92 @@ impl Environment {
     /// the conversion of this schema to a Nickel contract or predicate.
     ///
     /// Note that we have to repeat the creation process: when converting the referenced
-    /// definitions, those definitions might themselves reference other definitions that were not
-    /// used until now. We record those usages as well, and iterate until no new definition is ever
+    /// subschemas, those subschemas might themselves reference other subschemas that were not used
+    /// until now. We record those usages as well, and iterate until no new definition is ever
     /// referenced.
     pub fn new(root_schema: &RootSchema, mut refs_usage: RefsUsage) -> Self {
-        let mut definitions = HashMap::new();
-        let mut property_preds = HashMap::new();
+        let mut references =
+            Vec::with_capacity(refs_usage.predicates.len() + refs_usage.contracts.len());
 
-        // The stack of definition to process. We might grow this stack as converting some
-        // definitions references new ones.
-        let mut def_stack: Vec<_> = refs_usage
-            .defs_predicates
+        // The stack of references to process. We might grow this stack as converting some
+        // references might refer to new subschemas.
+        let mut ref_stack: Vec<_> = refs_usage
+            .predicates
             .iter()
-            .chain(&refs_usage.defs_contracts)
-            .cloned()
+            .map(|ptr| (ptr.clone(), RefUsageContext::Predicate))
+            .chain(
+                refs_usage
+                    .contracts
+                    .iter()
+                    .map(|ptr| (ptr.clone(), RefUsageContext::Contract)),
+            )
             .collect();
 
-        while let Some(def) = def_stack.pop() {
-            let Some(schema) = root_schema.definitions.get(&def) else {
+        while let Some((schema_ptr, usage)) = ref_stack.pop() {
+            let Some(schema) = schema_ptr.resolve(root_schema) else {
                 eprintln!(
-                    "Warning: definition `{def}` is referenced in the schema but couldn't be found"
+                    "Warning: definition `{schema_ptr}` is referenced in the schema but couldn't be found"
                 );
                 continue;
             };
 
-            let mut cur_usage = RefsUsage::new();
-
+            let mut new_refs_usage = RefsUsage::new();
             let doc = Documentation::try_from(schema).ok();
 
-            let predicate = refs_usage
-                .defs_predicates
-                .contains(&def)
-                .then(|| schema.as_predicate(&mut cur_usage));
+            let term = match usage {
+                RefUsageContext::Contract => schema
+                    .try_as_contract(&mut new_refs_usage)
+                    .unwrap_or_else(|| schema.as_predicate_contract(&mut new_refs_usage))
+                    .into(),
+                RefUsageContext::Predicate => schema.as_predicate(&mut new_refs_usage).into(),
+            };
 
-            let contract = refs_usage.defs_contracts.contains(&def).then(|| {
-                schema.try_as_contract(&mut cur_usage).unwrap_or_else(|| {
-                    Contract::from(
-                        predicate
-                            .clone()
-                            .unwrap_or_else(|| schema.as_predicate(&mut cur_usage)),
-                    )
-                })
+            references.push(ConvertedRef {
+                doc,
+                term,
+                usage,
+                pointer: schema_ptr,
             });
 
-            // Because of the iterative nature of the process, the definition might already be
-            // present in `definitions` (for example, if it was referenced as a predicate, and then
-            // later as a contract during the definition conversion phase). In this case, we simply
-            // merge the entries.
-            match definitions.entry(def) {
-                Entry::Occupied(mut entry) => {
-                    let entry: &mut ConvertedDef = entry.get_mut();
-                    entry.contract = entry.contract.take().or(contract);
-                    entry.predicate = entry.predicate.take().or(predicate);
-                }
-                Entry::Vacant(entry) => {
-                    entry.insert(ConvertedDef {
-                        doc,
-                        predicate,
-                        contract,
-                    });
-                }
-            }
-
             // Adding the new usages to the stack
-            let new_usages = cur_usage.defs_diff(&refs_usage);
-            def_stack.extend(new_usages);
+            let usage_diff = new_refs_usage.diff(&refs_usage);
+
+            ref_stack.extend(
+                usage_diff
+                    .predicates
+                    .into_iter()
+                    .map(|ptr| (ptr, RefUsageContext::Predicate)),
+            );
+
+            ref_stack.extend(
+                usage_diff
+                    .contracts
+                    .into_iter()
+                    .map(|ptr| (ptr, RefUsageContext::Contract)),
+            );
 
             // Update refs_usage with the usages from this iteration
-            refs_usage.extend(cur_usage);
+            refs_usage.extend(new_refs_usage);
         }
 
-        // We need to pass a ref usage object when converting properties and definitions to put
-        // them in the environment. However, we don't care about properties, because they've been
-        // converted at least once already (all properties unconditionally appear in the final
-        // contract). Thus, converting those properties again shouldn't add new usage, and we can
-        // ignore their usage.
-        let mut usage_placeholder = RefsUsage::new();
-
-        for path in refs_usage.props_predicates.iter() {
-            let Some(schema) = get_property(&root_schema.schema, path) else {
-                eprintln!(
-                    "Warning: property `{}` is referenced in the schema but couldn't be found",
-                    path.join("/")
-                );
-                continue;
-            };
-
-            let predicate = schema.as_predicate(&mut usage_placeholder);
-            let doc = Documentation::try_from(schema).ok();
-
-            property_preds.insert(path.clone(), ConvertedProp { doc, predicate });
-        }
-
-        Environment {
-            definitions,
-            property_preds,
-        }
+        Environment { references }
     }
 
     /// Wrap a Nickel [`RichTerm`] in a let binding containing the definitions
     /// from the environment. This is necessary for the Nickel access terms
     /// tracked in the environment to actually work.
-    pub fn wrap(mut self, inner: RichTerm) -> RichTerm {
-        let contracts = self
-            .definitions
-            .iter_mut()
-            .filter_map(|(k, v)| Some((Ident::from(k), v.contract_as_field()?)))
+    pub fn wrap(self, inner: RichTerm) -> RichTerm {
+        let fields = self
+            .references
+            .into_iter()
+            .map(ConvertedRef::into_binding)
             .collect();
 
-        let predicates = self
-            .definitions
-            .into_iter()
-            .filter_map(|(k, mut v)| Some((Ident::from(k), v.predicate_as_field()?)))
-            .collect();
-
-        let prop_preds = self
-            .property_preds
-            .into_iter()
-            .map(|(k, v)| (Ident::from(k.join("/")), Field::from(v)))
-            .collect();
-
-        // All the definitions as a Nickel record
-        let defs = Term::Record(RecordData::with_field_values(
-            [
-                (
-                    Ident::from("contracts"),
-                    Term::Record(RecordData {
-                        fields: contracts,
-                        ..Default::default()
-                    })
-                    .into(),
-                ),
-                (
-                    Ident::from("predicates"),
-                    Term::Record(RecordData {
-                        fields: predicates,
-                        ..Default::default()
-                    })
-                    .into(),
-                ),
-            ]
-            .into_iter()
-            .collect(),
-        ))
-        .into();
-
-        // All the properties (predicates) as a Nickel record
-        let props = Term::Record(RecordData {
-            fields: prop_preds,
+        // All references are stored in the references environment, which is a flat record.
+        let global_env = Term::Record(RecordData {
+            fields,
             ..Default::default()
-        })
-        .into();
-
-        // The enclosing record, with one field for the definitions and one for the properties
-        let global_env = Term::Record(RecordData::with_field_values(
-            [
-                (Ident::from(DEFINITIONS_ID), defs),
-                (Ident::from(PROPS_PREDICATES_ID), props),
-            ]
-            .into_iter()
-            .collect(),
-        ));
+        });
 
         Term::Let(
             Ident::from(ENVIRONMENT_ID),
@@ -514,44 +705,4 @@ impl Environment {
         )
         .into()
     }
-}
-
-/// Get the property located at a path in a schema.
-///
-/// # Example
-///
-/// For a path `["foo", "bar"]`, this function will extract (if it exists) the schema corresponding
-/// to the JSON pointer `properties/foo/properties/bar`.
-///
-/// # Return values
-///
-/// - Returns `Some(subschema)` if the path exists in the schema and points to `subschema`.
-/// - Returns `None` if the path does not exist in the schema or the path is empty.
-///
-/// Note: it looks like we could return the original value upon empty path, but there's a mismatch:
-/// we get a `SchemaObject` reference, and we must return a `Schema` reference. We can't convert
-/// between the two (we can convert between the owned variants easily, but not for references).
-/// Since we can special case empty paths before calling to `get_property` if really needed, it's
-/// simpler to just return `None` here.
-pub fn get_property<'a>(schema_obj: &'a SchemaObject, path: &[String]) -> Option<&'a Schema> {
-    let mut current: Option<&Schema> = None;
-
-    for prop in path {
-        // We start from a schema object, but then always go from schemas to schemas, which requires
-        // this bit of juggling.
-        let current_obj = match current {
-            // We had at least one iteration before and the current schema is an object, which means we
-            // can indeed index into it.
-            Some(Schema::Object(next)) => next,
-            // We had at least one iteration before but the current schema isn't an object, we
-            // can't index into it.
-            Some(_) => return None,
-            // This is the first iteration, so we start from the initial schema object
-            None => schema_obj,
-        };
-
-        current = Some(current_obj.object.as_ref()?.properties.get(prop)?);
-    }
-
-    current
 }

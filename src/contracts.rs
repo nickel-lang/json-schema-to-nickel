@@ -24,7 +24,7 @@
 //! ```
 //!
 //! is turned into the Nickel type `Bool`.
-use crate::definitions::RefUsage;
+use crate::definitions::RefUsageContext;
 use schemars::schema::RootSchema;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -163,7 +163,7 @@ impl TryAsContract for SchemaObject {
             } if only_ignored_fields(extensions) => Some(Contract::from(definitions::resolve_ref(
                 reference,
                 refs_usage,
-                RefUsage::Contract,
+                RefUsageContext::Contract,
             ))),
             // a freeform record
             SchemaObject {
