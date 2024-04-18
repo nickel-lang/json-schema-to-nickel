@@ -30,7 +30,7 @@
 //! At the end, we can elaborate the required special values like `___nickel_defs` and only include
 //! the actually used in the final contract, to avoid bloating the result.
 use fluent_uri;
-use std::collections::HashSet;
+use std::{borrow::Cow, collections::HashSet};
 
 use nickel_lang_core::{
     identifier::LocIdent,
@@ -263,24 +263,34 @@ impl SchemaPointer {
 
     /// Returns the subschema pointed to by `self` in the given schema object.
     ///
+    /// `'schema` is the lifetime of the original root schema, from where schema references (in the
+    /// Rust sense) are taken.
+    ///
     /// # Return values
     ///
     /// - Returns `Some(subschema)` if the path exists in the schema and points to `subschema`.
     /// - Returns `None` if the path does not exist in the schema or the path is empty.
+    ///
+    /// This method returns a `Cow`, because depending on the path, it might have to serialize new
+    /// schemas on the fly, which then have to be carried around as owned values. But in most
+    /// cases, it will just keep references to components of the original schema.
     ///
     /// Note: it looks like we could return the original value upon empty path, but there's a type
     /// mismatch: we get a `SchemaObject` reference, and we must return a `Schema` reference. We
     /// can't convert between the two (we can convert between the owned variants easily, but not
     /// for references). Since we can special case empty paths before calling [Self::resolve] if
     /// really needed, it's simpler to just return `None` here.
-    pub fn resolve<'a>(&self, root_schema: &'a RootSchema) -> Option<&'a Schema> {
-        enum CurrentSchema<'a> {
-            Schema(&'a Schema),
-            Root(&'a RootSchema),
+    pub fn resolve<'schema>(
+        &self,
+        root_schema: &'schema RootSchema,
+    ) -> Option<Cow<'schema, Schema>> {
+        enum CurrentSchema<'schema> {
+            Schema(&'schema Schema),
+            Root(&'schema RootSchema),
         }
 
-        impl<'a> CurrentSchema<'a> {
-            fn object<'b>(&'b self) -> Option<&'a SchemaObject> {
+        impl<'schema> CurrentSchema<'schema> {
+            fn object<'a>(&'a self) -> Option<&'schema SchemaObject> {
                 match self {
                     CurrentSchema::Schema(Schema::Object(obj)) => Some(obj),
                     CurrentSchema::Schema(Schema::Bool(_)) => None,
@@ -299,114 +309,152 @@ impl SchemaPointer {
             }
         }
 
-        let mut current = CurrentSchema::Root(root_schema);
+        // Actual resolution logic. We have to make this function a bit more general than the
+        // parent one, because we might nest calls to `resolve_from`. The issue is that when we
+        // encounter nested definitions, those aren't properly represented in schemars. We can
+        // still work around it by finding them in the `extensions` field of the object, but we
+        // have to convert a JSON value to a schema on the fly.
+        //
+        // Because we just created this value locally, it can't be borrowed for the original
+        // `'schema`, and it's very annoying to adapt to potentially owned values (if possible at
+        // all, as it probably requires to propagate `Cow<'schema, _>` everywhere, including in
+        // schemars types).
+        //
+        // As often in Rust, it's simpler to nest function calls in order to convince the compiler
+        // that the lifetimes are properly nested as well.
+        fn resolve_from<'ptr, 'schema>(
+            mut it: impl Iterator<Item = &'ptr SchemaPointerElt>,
+            mut current: CurrentSchema<'schema>,
+        ) -> Option<Cow<'schema, Schema>> {
+            // We don't use a for loop, because this would move `it`, but we need it for the
+            // recursive call to `resolve_from` in the case of nested definitions.
+            while let Some(elt) = it.next() {
+                let new = match elt {
+                    SchemaPointerElt::Definitions(name) => {
+                        if let CurrentSchema::Root(root) = current {
+                            root.definitions.get(name).map(CurrentSchema::Schema)
+                        } else {
+                            // schemars doesn't represent nested definitions, but in practice they
+                            // are still present in the generic `extensions` field, so we can work
+                            // it out by reserializing the JSON value manually.
+                            let def_value = current
+                                .object()?
+                                .extensions
+                                .get("definitions")?
+                                .get(name)?
+                                .clone();
 
-        for elt in self.path.iter() {
-            let new = match elt {
-                SchemaPointerElt::Definitions(name) => {
-                    if let CurrentSchema::Root(root) = current {
-                        root.definitions.get(name).map(CurrentSchema::Schema)
-                    } else {
-                        eprintln!(
-                            "Warning: couldn't access nested definition `{name}`. \
-                            json-schema-to-nickel only supports references to top-level \
-                            definitions"
-                        );
-                        None
-                    }
-                }
-                SchemaPointerElt::Properties(prop) => current
-                    .object()?
-                    .object
-                    .as_ref()?
-                    .properties
-                    .get(prop)
-                    .map(CurrentSchema::Schema),
-                SchemaPointerElt::AdditionalProperties => current
-                    .object()?
-                    .object
-                    .as_ref()?
-                    .additional_properties
-                    .as_ref()
-                    .map(|s| CurrentSchema::Schema(s.as_ref())),
-                SchemaPointerElt::ItemsIndexed(index) => {
-                    match current.object()?.array.as_ref()?.items.as_ref() {
-                        Some(SingleOrVec::Vec(vec)) => {
-                            warn_if_out_of_bounds(vec, *index, "items");
-                            vec.get(*index).map(CurrentSchema::Schema)
+                            let def: Schema = serde_json::from_value(def_value).ok()?;
+
+                            // This is where we use the recursive call to make it possible to
+                            // operate on a shorter `'schema` that `def` can outlive.
+                            let result = resolve_from(it, CurrentSchema::Schema(&def))?;
+
+                            // However, once done, we get a reference with a lifetime strictly
+                            // smaller to the initial `'schema`. This is why the return type of the
+                            // parent method has a `Cow` in it, so that we can return an owned
+                            // value.
+                            return Some(Cow::Owned(result.into_owned()));
                         }
-                        Some(SingleOrVec::Single(_)) => {
+                    }
+                    SchemaPointerElt::Properties(prop) => current
+                        .object()?
+                        .object
+                        .as_ref()?
+                        .properties
+                        .get(prop)
+                        .map(CurrentSchema::Schema),
+                    SchemaPointerElt::AdditionalProperties => current
+                        .object()?
+                        .object
+                        .as_ref()?
+                        .additional_properties
+                        .as_ref()
+                        .map(|s| CurrentSchema::Schema(s.as_ref())),
+                    SchemaPointerElt::ItemsIndexed(index) => {
+                        match current.object()?.array.as_ref()?.items.as_ref() {
+                            Some(SingleOrVec::Vec(vec)) => {
+                                warn_if_out_of_bounds(vec, *index, "items");
+                                vec.get(*index).map(CurrentSchema::Schema)
+                            }
+                            Some(SingleOrVec::Single(_)) => {
+                                eprintln!(
+                                    "Warning: trying to access `items` at index {index} in a \
+                                    reference, but `items` is a single schema in the current \
+                                    document, not an array"
+                                );
+
+                                None
+                            }
+                            _ => None,
+                        }
+                    }
+                    SchemaPointerElt::ItemsSingle => match &current.object()?.array.as_ref()?.items
+                    {
+                        Some(SingleOrVec::Single(sub)) => Some(CurrentSchema::Schema(sub.as_ref())),
+                        Some(SingleOrVec::Vec(_)) => {
                             eprintln!(
-                                "Warning: trying to access `items` at index {index} in a \
-                                reference, but `items` is a single schema in the current \
-                                document, not an array"
+                                "Warning: trying to access `items` in a reference without an \
+                                index, but `items` is an array of schemas in the current \
+                                document, not a single schema"
                             );
+
                             None
                         }
                         _ => None,
+                    },
+                    SchemaPointerElt::Contains => Some(CurrentSchema::Schema(
+                        current.object()?.array.as_ref()?.contains.as_ref()?,
+                    )),
+                    SchemaPointerElt::AllOf(index) => {
+                        let all_of = current.object()?.subschemas.as_ref()?.all_of.as_ref()?;
+                        warn_if_out_of_bounds(all_of, *index, "allOf");
+                        all_of.get(*index).map(CurrentSchema::Schema)
                     }
-                }
-                SchemaPointerElt::ItemsSingle => match &current.object()?.array.as_ref()?.items {
-                    Some(SingleOrVec::Single(sub)) => Some(CurrentSchema::Schema(sub.as_ref())),
-                    Some(SingleOrVec::Vec(_)) => {
-                        eprintln!(
-                            "Warning: trying to access `items` in a reference without an index, \
-                            but `items` is an array of schemas in the current document, not \
-                            a single schema"
-                        );
-                        None
+                    SchemaPointerElt::AnyOf(index) => {
+                        let any_of = current.object()?.subschemas.as_ref()?.any_of.as_ref()?;
+                        warn_if_out_of_bounds(any_of, *index, "anyOf");
+                        any_of.get(*index).map(CurrentSchema::Schema)
                     }
-                    _ => None,
-                },
-                SchemaPointerElt::Contains => Some(CurrentSchema::Schema(
-                    current.object()?.array.as_ref()?.contains.as_ref()?,
-                )),
-                SchemaPointerElt::AllOf(index) => {
-                    let all_of = current.object()?.subschemas.as_ref()?.all_of.as_ref()?;
-                    warn_if_out_of_bounds(all_of, *index, "allOf");
-                    all_of.get(*index).map(CurrentSchema::Schema)
-                }
-                SchemaPointerElt::AnyOf(index) => {
-                    let any_of = current.object()?.subschemas.as_ref()?.any_of.as_ref()?;
-                    warn_if_out_of_bounds(any_of, *index, "anyOf");
-                    any_of.get(*index).map(CurrentSchema::Schema)
-                }
-                SchemaPointerElt::OneOf(index) => {
-                    let one_of = current.object()?.subschemas.as_ref()?.one_of.as_ref()?;
-                    warn_if_out_of_bounds(one_of, *index, "oneOf");
-                    one_of.get(*index).map(CurrentSchema::Schema)
-                }
-                SchemaPointerElt::Not => current
-                    .object()?
-                    .subschemas
-                    .as_ref()?
-                    .not
-                    .as_ref()
-                    .map(|s| CurrentSchema::Schema(s)),
-                SchemaPointerElt::Then => current
-                    .object()?
-                    .subschemas
-                    .as_ref()?
-                    .then_schema
-                    .as_ref()
-                    .map(|s| CurrentSchema::Schema(s)),
-                SchemaPointerElt::Else => current
-                    .object()?
-                    .subschemas
-                    .as_ref()?
-                    .else_schema
-                    .as_ref()
-                    .map(|s| CurrentSchema::Schema(s.as_ref())),
-            }?;
+                    SchemaPointerElt::OneOf(index) => {
+                        let one_of = current.object()?.subschemas.as_ref()?.one_of.as_ref()?;
+                        warn_if_out_of_bounds(one_of, *index, "oneOf");
+                        one_of.get(*index).map(CurrentSchema::Schema)
+                    }
+                    SchemaPointerElt::Not => current
+                        .object()?
+                        .subschemas
+                        .as_ref()?
+                        .not
+                        .as_ref()
+                        .map(|s| CurrentSchema::Schema(s)),
+                    SchemaPointerElt::Then => current
+                        .object()?
+                        .subschemas
+                        .as_ref()?
+                        .then_schema
+                        .as_ref()
+                        .map(|s| CurrentSchema::Schema(s)),
+                    SchemaPointerElt::Else => current
+                        .object()?
+                        .subschemas
+                        .as_ref()?
+                        .else_schema
+                        .as_ref()
+                        .map(|s| CurrentSchema::Schema(s.as_ref())),
+                }?;
 
-            current = new;
+                current = new;
+            }
+
+            if let CurrentSchema::Schema(current) = current {
+                Some(Cow::Borrowed(current))
+            } else {
+                None
+            }
         }
 
-        if let CurrentSchema::Schema(current) = current {
-            Some(current)
-        } else {
-            None
-        }
+        resolve_from(self.path.iter(), CurrentSchema::Root(root_schema))
     }
 }
 
@@ -720,7 +768,7 @@ impl Environment {
 
             let (doc, term) = {
                 if let Some(schema) = schema_ptr.resolve(root_schema) {
-                    let doc = Documentation::try_from(schema).ok();
+                    let doc = Documentation::try_from(schema.as_ref()).ok();
 
                     let term = match usage {
                         RefUsageContext::Contract => schema
@@ -735,8 +783,8 @@ impl Environment {
                     (doc, term)
                 } else {
                     eprintln!(
-                    "Warning: definition `{schema_ptr}` is referenced in the schema but couldn't \
-                    be found. Replaced with an always succeeding contract."
+                        "Warning: definition `{schema_ptr}` is referenced in the schema \
+                        but couldn't be found. Replaced with an always succeeding contract."
                     );
 
                     (None, usage.default_term())
