@@ -246,7 +246,7 @@ impl SchemaPointer {
             .all(|elt| matches!(elt, SchemaPointerElt::Properties(_)))
     }
 
-    /// Returns the subschema pointed by `self` in the given schema object.
+    /// Returns the subschema pointed to by `self` in the given schema object.
     ///
     /// # Return values
     ///
@@ -256,7 +256,7 @@ impl SchemaPointer {
     /// Note: it looks like we could return the original value upon empty path, but there's a type
     /// mismatch: we get a `SchemaObject` reference, and we must return a `Schema` reference. We
     /// can't convert between the two (we can convert between the owned variants easily, but not
-    /// for references). Since we can special case empty paths before calling to [Self::resolve] if
+    /// for references). Since we can special case empty paths before calling [Self::resolve] if
     /// really needed, it's simpler to just return `None` here.
     pub fn resolve<'a>(&self, root_schema: &'a RootSchema) -> Option<&'a Schema> {
         enum CurrentSchema<'a> {
