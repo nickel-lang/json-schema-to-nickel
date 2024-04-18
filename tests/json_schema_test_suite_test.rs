@@ -101,7 +101,7 @@ fn translation_typecheck_test(
         // field missing, missing field def, or generic contract error (blame error)
         (false, Err(Error::EvalError(EvalError::BlameError { .. })))
         | (false, Err(Error::EvalError(EvalError::MissingFieldDef { .. })))
-        | (false, Err(Error::EvalError(EvalError::FieldMissing(..)))) => {}
+        | (false, Err(Error::EvalError(EvalError::FieldMissing { .. }))) => {}
         (false, Ok(_)) => panic!("expected blame error, got success"),
         (false, Err(e)) => panic!("expected blame error, got different error {e:#?}"),
     }

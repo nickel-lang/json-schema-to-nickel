@@ -1,5 +1,5 @@
 use nickel_lang_core::{
-    identifier::Ident,
+    identifier::LocIdent,
     term::{make, RichTerm},
 };
 
@@ -7,7 +7,7 @@ pub fn static_access<I, S>(record: S, fields: I) -> RichTerm
 where
     I: IntoIterator<Item = S>,
     I::IntoIter: DoubleEndedIterator,
-    S: Into<Ident>,
+    S: Into<LocIdent>,
 {
     make::static_access(make::var(record), fields)
 }

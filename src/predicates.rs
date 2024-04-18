@@ -6,11 +6,10 @@
 //!
 //! The drawback is that the resulting Nickel contracts are eager (they don't preserve lazyness)
 //! and are less LSP-friendly.
-use crate::definitions::RefUsageContext;
 use std::{collections::BTreeMap, iter};
 
 use nickel_lang_core::{
-    identifier::Ident,
+    identifier::LocIdent,
     mk_app,
     term::{array::Array, make, record::RecordData, Number, RichTerm, Term},
 };
@@ -21,7 +20,7 @@ use schemars::schema::{
 use serde_json::Value;
 
 use crate::{
-    definitions::{self, RefsUsage},
+    definitions::{self, RefUsageContext, RefsUsage},
     utils::static_access,
     PREDICATES_LIBRARY_ID,
 };
@@ -535,13 +534,11 @@ impl AsPredicates for ObjectValidation {
                 properties
                     .iter()
                     .map(|(k, v)| (k.into(), v.as_predicate(refs_usage).into()))
-                    .collect()
             )),
             Term::Record(RecordData::with_field_values(
                 pattern_properties
                     .iter()
                     .map(|(k, v)| (k.into(), v.as_predicate(refs_usage).into()))
-                    .collect()
             )),
             Term::Bool(!matches!(
                 additional_properties.as_deref(),
@@ -573,28 +570,24 @@ fn dependencies(
         .map(|deps| {
             mk_app!(
                 static_access(PREDICATES_LIBRARY_ID, ["records", "dependencies"]),
-                Term::Record(RecordData::with_field_values(
-                    deps.into_iter()
-                        .map(|(key, value)| (
-                            Ident::from(key),
-                            if let Some(fields) = value.as_array().and_then(|v| v
-                                .iter()
-                                .map(|s| s.as_str())
-                                .collect::<Option<Vec<_>>>())
-                            {
-                                Term::Array(
-                                    Array::new(fields.into_iter().map(make::string).collect()),
-                                    Default::default(),
-                                )
-                                .into()
-                            } else {
-                                serde_json::from_value::<Schema>(value.clone())
-                                    .map(|s| s.as_predicate(refs_usage).into())
-                                    .unwrap()
-                            }
-                        ))
-                        .collect()
-                ))
+                Term::Record(RecordData::with_field_values(deps.into_iter().map(
+                    |(key, value)| (
+                        LocIdent::from(key),
+                        if let Some(fields) = value.as_array().and_then(|v| {
+                            v.iter().map(|s| s.as_str()).collect::<Option<Vec<_>>>()
+                        }) {
+                            Term::Array(
+                                Array::new(fields.into_iter().map(make::string).collect()),
+                                Default::default(),
+                            )
+                            .into()
+                        } else {
+                            serde_json::from_value::<Schema>(value.clone())
+                                .map(|s| s.as_predicate(refs_usage).into())
+                                .unwrap()
+                        }
+                    )
+                )))
             )
             .into()
         })
