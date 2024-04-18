@@ -135,7 +135,7 @@ impl SchemaPointer {
         }
 
         let mut path = Vec::new();
-        let mut it = json_ptr.split('/').map(decode_json_ptr_part);
+        let mut it = json_ptr.split('/').map(decode_json_ptr_part).peekable();
 
         while let Some(keyword) = it.next() {
             match keyword.as_ref() {
@@ -148,10 +148,13 @@ impl SchemaPointer {
                         .ok_or(SchemaPointerParseError::MissingIndex(keyword))?,
                 )),
                 "items" => {
-                    path.push(SchemaPointerElt::Items(parse_array_idx(
-                        keyword,
-                        it.next(),
-                    )?));
+                    if let Ok(index) = parse_array_idx(keyword, it.peek().cloned()) {
+                        // Actually consume the token we've peeked at
+                        it.next();
+                        path.push(SchemaPointerElt::ItemsIndexed(index));
+                    } else {
+                        path.push(SchemaPointerElt::ItemsSingle);
+                    }
                 }
                 "contains" => {
                     path.push(SchemaPointerElt::Contains);
@@ -303,24 +306,35 @@ impl SchemaPointer {
                     .properties
                     .get(prop)
                     .map(CurrentSchema::Schema),
-                SchemaPointerElt::Items(index) => {
+                SchemaPointerElt::ItemsIndexed(index) => {
                     match current.object()?.array.as_ref()?.items.as_ref() {
-                        Some(SingleOrVec::Single(sub)) => {
-                            warn_if_out_of_bounds(&[sub.as_ref()], *index, "items");
-
-                            if *index == 0 {
-                                Some(CurrentSchema::Schema(sub.as_ref()))
-                            } else {
-                                None
-                            }
-                        }
                         Some(SingleOrVec::Vec(vec)) => {
                             warn_if_out_of_bounds(vec, *index, "items");
                             vec.get(*index).map(CurrentSchema::Schema)
                         }
-                        None => None,
+                        Some(SingleOrVec::Single(_)) => {
+                            eprintln!(
+                                "Warning: trying to access `items` at index {index} in a \
+                                reference, but `items` is a single schema in the current \
+                                document, not an array"
+                            );
+                            None
+                        }
+                        _ => None,
                     }
                 }
+                SchemaPointerElt::ItemsSingle => match &current.object()?.array.as_ref()?.items {
+                    Some(SingleOrVec::Single(sub)) => Some(CurrentSchema::Schema(sub.as_ref())),
+                    Some(SingleOrVec::Vec(_)) => {
+                        eprintln!(
+                            "Warning: trying to access `items` in a reference without an index, \
+                            but `items` is an array of schemas in the current document, not \
+                            a single schema"
+                        );
+                        None
+                    }
+                    _ => None,
+                },
                 SchemaPointerElt::Contains => Some(CurrentSchema::Schema(
                     current.object()?.array.as_ref()?.contains.as_ref()?,
                 )),
@@ -398,7 +412,17 @@ impl std::fmt::Display for SchemaPointer {
 pub enum SchemaPointerElt {
     Definitions(String),
     Properties(String),
-    Items(usize),
+    /// An `items` followed by an array index.
+    ///
+    /// In a JSON Schema, `items` might be either a single schema or an array of schemas. In the
+    /// single schema case, it doesn't need to be indexed in a json pointer, as in
+    /// `#/items/properties/foo`. In the array case, an `items` must be followed by a natural
+    /// number. As we want to parse schema pointer independently of the schema, whether an `items`
+    /// is parsed as [Self::ItemsIndexed] or [Self::Items] depends on the next element of the path
+    /// being a valid array index or not.
+    ItemsIndexed(usize),
+    /// An `items` not followed by a valid array index.
+    ItemsSingle,
     Contains,
     AllOf(usize),
     AnyOf(usize),
@@ -413,7 +437,8 @@ impl std::fmt::Display for SchemaPointerElt {
         match self {
             SchemaPointerElt::Definitions(name) => write!(f, "definitions/{name}"),
             SchemaPointerElt::Properties(name) => write!(f, "properties/{name}"),
-            SchemaPointerElt::Items(index) => write!(f, "items/{index}"),
+            SchemaPointerElt::ItemsIndexed(index) => write!(f, "items/{index}"),
+            SchemaPointerElt::ItemsSingle => write!(f, "items"),
             SchemaPointerElt::Contains => write!(f, "contains"),
             SchemaPointerElt::AllOf(index) => write!(f, "allOf/{index}"),
             SchemaPointerElt::AnyOf(index) => write!(f, "anyOf/{index}"),
