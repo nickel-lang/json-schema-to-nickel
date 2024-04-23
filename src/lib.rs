@@ -27,7 +27,7 @@ pub(crate) mod utils;
 use contracts::Contract;
 use definitions::Environment;
 use nickel_lang_core::{
-    cache::{Cache, ErrorTolerance},
+    cache::{Cache, ErrorTolerance, SourcePath},
     parser::{grammar::TermParser, lexer::Lexer, ErrorTolerantParser},
     term::{RichTerm, Term},
 };
@@ -70,7 +70,10 @@ pub fn wrap_contract(env: Environment, contract: Contract) -> RichTerm {
 
     let mut cache = Cache::new(ErrorTolerance::Strict);
     let parser = TermParser::new();
-    let file_id = cache.add_string("predicates.ncl", lib_ncl.to_string());
+    let file_id = cache.add_string(
+        SourcePath::Generated("predicates.ncl".to_owned()),
+        lib_ncl.to_string(),
+    );
     let lexer = Lexer::new(cache.source(file_id));
     let lib_rt = parser.parse_strict(file_id, lexer).unwrap();
 

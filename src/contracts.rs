@@ -25,6 +25,7 @@
 //!
 //! is turned into the Nickel type `Bool`.
 use crate::definitions::RefUsageContext;
+use nickel_lang_core::typ::EnumRowF;
 use schemars::schema::RootSchema;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -181,7 +182,10 @@ impl TryAsContract for SchemaObject {
                 extensions,
             } if **instance_type == InstanceType::Object && only_ignored_fields(extensions) => {
                 Some(Contract::from(Term::Record(RecordData {
-                    attrs: RecordAttrs { open: true },
+                    attrs: RecordAttrs {
+                        open: true,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 })))
             }
@@ -222,12 +226,17 @@ impl TryAsContract for SchemaObject {
                     values
                         .iter()
                         .try_fold(EnumRows(EnumRowsF::Empty), |acc, value| {
-                            let id = match value {
-                                Value::String(s) => s.into(),
-                                _ => return None,
+                            let Value::String(id) = value else {
+                                return None;
                             };
+
+                            let row = EnumRowF {
+                                id: id.into(),
+                                typ: None,
+                            };
+
                             Some(EnumRows(EnumRowsF::Extend {
-                                row: id,
+                                row,
                                 tail: Box::new(acc),
                             }))
                         })?;
@@ -367,7 +376,10 @@ impl From<&InstanceType> for Contract {
             ))),
             InstanceType::Boolean => Contract::from(TypeF::Bool),
             InstanceType::Object => Contract::from(Term::Record(RecordData {
-                attrs: RecordAttrs { open: true },
+                attrs: RecordAttrs {
+                    open: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             })),
             InstanceType::Array => Contract::from(TypeF::Array(Box::new(TypeF::Dyn.into()))),
@@ -455,7 +467,10 @@ fn generate_record_contract(
     });
     Term::Record(RecordData {
         fields: fields.collect(),
-        attrs: RecordAttrs { open },
+        attrs: RecordAttrs {
+            open,
+            ..Default::default()
+        },
         ..Default::default()
     })
     .into()

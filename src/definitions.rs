@@ -30,23 +30,21 @@
 //! At the end, we can elaborate the required special values like `___nickel_defs` and only include
 //! the actually used in the final contract, to avoid bloating the result.
 
-use crate::contracts::AsPredicateContract;
-use crate::{contracts::TryAsContract, predicates::AsPredicate};
-use schemars::schema::SingleOrVec;
 use std::collections::HashSet;
 
 use nickel_lang_core::{
-    identifier::Ident,
+    identifier::LocIdent,
     term::{
         record::{Field, FieldMetadata, RecordData},
         LetAttrs, RichTerm, Term,
     },
 };
-use schemars::schema::{RootSchema, Schema, SchemaObject};
+
+use schemars::schema::{RootSchema, Schema, SchemaObject, SingleOrVec};
 
 use crate::{
-    contracts::{Contract, Documentation},
-    predicates::Predicate,
+    contracts::{AsPredicateContract, Contract, Documentation, TryAsContract},
+    predicates::{AsPredicate, Predicate},
     utils::{decode_json_ptr_part, static_access},
     ENVIRONMENT_ID, MANGLING_PREFIX,
 };
@@ -523,11 +521,8 @@ pub struct ConvertedRef {
 impl ConvertedRef {
     /// Return this reference as a Nickel record binding as it appears in the references environment,
     /// that is a pair of an identifier and a field value.
-    pub fn into_binding(self) -> (Ident, Field) {
-        (
-            Ident::from(self.pointer.nickel_uid(self.usage)),
-            self.into(),
-        )
+    pub fn into_binding(self) -> (LocIdent, Field) {
+        (self.pointer.nickel_uid(self.usage).into(), self.into())
     }
 }
 
@@ -748,7 +743,7 @@ impl Environment {
         });
 
         Term::Let(
-            Ident::from(ENVIRONMENT_ID),
+            ENVIRONMENT_ID.into(),
             global_env.into(),
             inner,
             LetAttrs {
