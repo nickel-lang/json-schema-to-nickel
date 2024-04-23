@@ -24,7 +24,7 @@
 //! ```
 //!
 //! is turned into the Nickel type `Bool`.
-use crate::definitions::RefUsageContext;
+use crate::references::RefUsageContext;
 use nickel_lang_core::typ::EnumRowF;
 use schemars::schema::RootSchema;
 use std::collections::{BTreeMap, BTreeSet};
@@ -45,8 +45,8 @@ use schemars::schema::{
 use serde_json::Value;
 
 use crate::{
-    definitions::{self, RefsUsage},
     predicates::{AsPredicate, Predicate},
+    references::{self, RefsUsage},
     utils::static_access,
     PREDICATES_LIBRARY_ID,
 };
@@ -161,7 +161,7 @@ impl TryAsContract for SchemaObject {
                 object: None,
                 reference: Some(reference),
                 extensions,
-            } if only_ignored_fields(extensions) => Some(Contract::from(definitions::resolve_ref(
+            } if only_ignored_fields(extensions) => Some(Contract::from(references::resolve_ref(
                 reference,
                 refs_usage,
                 RefUsageContext::Contract,

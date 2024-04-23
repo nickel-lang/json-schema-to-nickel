@@ -20,7 +20,7 @@ use schemars::schema::{
 use serde_json::Value;
 
 use crate::{
-    definitions::{self, RefUsageContext, RefsUsage},
+    references::{self, RefUsageContext, RefsUsage},
     utils::static_access,
     PREDICATES_LIBRARY_ID,
 };
@@ -638,7 +638,7 @@ impl AsPredicate for SchemaObject {
         );
 
         args.extend(reference.as_deref().map(|r| {
-            Predicate::from(definitions::resolve_ref(
+            Predicate::from(references::resolve_ref(
                 r,
                 refs_usage,
                 RefUsageContext::Predicate,

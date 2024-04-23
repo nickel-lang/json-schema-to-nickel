@@ -29,7 +29,7 @@
 //!
 //! At the end, we can elaborate the required special values like `___nickel_defs` and only include
 //! the actually used in the final contract, to avoid bloating the result.
-
+use fluent_uri;
 use std::collections::HashSet;
 
 use nickel_lang_core::{
@@ -307,7 +307,11 @@ impl SchemaPointer {
                     if let CurrentSchema::Root(root) = current {
                         root.definitions.get(name).map(CurrentSchema::Schema)
                     } else {
-                        eprintln!("Warning: couldn't access nested definition `{name}`. json-schema-to-nickel only supports references to top-level definitions");
+                        eprintln!(
+                            "Warning: couldn't access nested definition `{name}`. \
+                            json-schema-to-nickel only supports references to top-level \
+                            definitions"
+                        );
                         None
                     }
                 }
@@ -602,31 +606,74 @@ pub fn resolve_ref(
     refs_usage: &mut RefsUsage,
     usage: RefUsageContext,
 ) -> RichTerm {
-    if let Some(fragment) = reference.strip_prefix("#/") {
-        let schema_ptr = match SchemaPointer::parse(fragment) {
+    fn resolve_opt(
+        reference: &str,
+        refs_usage: &mut RefsUsage,
+        usage: RefUsageContext,
+    ) -> Option<RichTerm> {
+        let Ok(uri) = fluent_uri::Uri::parse(reference) else {
+            eprintln!(
+                "Warning: skipping reference `{reference}` (replaced by an always succeeding \
+                contract). Failed to parse it as valid URI."
+            );
+
+            return None;
+        };
+
+        // If the URI has anything else than a fragment, we bail out.
+        if uri.scheme().is_some()
+            || uri.authority().is_some()
+            || !uri.path().as_str().is_empty()
+            || uri.query().is_some()
+        {
+            eprintln!(
+                "Warning: skipping external reference `{reference}` (replaced by an always \
+                succeeding contract). The current version of json-schema-to-nickel only supports \
+                internal references"
+            );
+
+            return None;
+        }
+
+        // We don't support (yet) relative fragments.
+        let Some(fragment) = uri
+            .fragment()
+            .map(|fragment| fragment.decode().into_string_lossy())
+        else {
+            eprintln!(
+                "Warning: skipping reference `{reference}` (replaced by an always succeeding \
+                contract). The URI doesn't have a fragment"
+            );
+
+            return None;
+        };
+
+        let Some(stripped) = fragment.strip_prefix('/') else {
+            eprintln!(
+                "Warning: skipping reference `{reference}` (replaced by an always succeeding \
+                contract). json-schema-to-nickel doesn't handle references to element ids."
+            );
+
+            return None;
+        };
+
+        let schema_ptr = match SchemaPointer::parse(stripped) {
             Ok(ptr) => ptr,
             Err(err) => {
                 eprintln!(
-                    "Warning: skipping external reference {reference} (replaced by an always \
+                    "Warning: skipping reference `{reference}` (replaced by an always \
                     succeeding contract). {err}"
                 );
 
-                return usage.default_term();
+                return None;
             }
         };
 
         refs_usage.record_usage(schema_ptr.clone(), usage);
-        schema_ptr.access(usage)
-    } else {
-        eprintln!(
-            "
-            Warning: skipping external reference {reference} (replaced by an always succeeding \
-            contract). The current version of json-schema-to-nickel only supports internal \
-            JSON pointer references"
-        );
-
-        usage.default_term()
+        Some(schema_ptr.access(usage))
     }
+
+    resolve_opt(reference, refs_usage, usage).unwrap_or_else(|| usage.default_term())
 }
 
 /// An environment of all reference pointees and their conversions into Nickel predicates and
@@ -688,7 +735,8 @@ impl Environment {
                     (doc, term)
                 } else {
                     eprintln!(
-                    "Warning: definition `{schema_ptr}` is referenced in the schema but couldn't be found. Replaced with an always succeeding contract."
+                    "Warning: definition `{schema_ptr}` is referenced in the schema but couldn't \
+                    be found. Replaced with an always succeeding contract."
                     );
 
                     (None, usage.default_term())

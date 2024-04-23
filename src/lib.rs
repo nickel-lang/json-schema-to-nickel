@@ -20,18 +20,18 @@
 //! generates a predicate. In either case, the result is wrapped with the
 //! necessary bindings to the predicate support library and returned.
 pub mod contracts;
-pub mod definitions;
 pub mod predicates;
+pub mod references;
 pub(crate) mod utils;
 
 use contracts::Contract;
-use definitions::Environment;
 use nickel_lang_core::{
     cache::{Cache, ErrorTolerance, SourcePath},
     parser::{grammar::TermParser, lexer::Lexer, ErrorTolerantParser},
     term::{RichTerm, Term},
 };
 use predicates::Predicate;
+use references::Environment;
 use schemars::schema::RootSchema;
 
 /// The top-level variable storing the json-schema-to-nickel predicate library included by default
