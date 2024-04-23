@@ -54,8 +54,6 @@ use stringreader::StringReader;
     "ref_29_0.*", // external reference (remote URI)
     "ref_30_0.*", // external reference (remote URI)
     "ref_31_1.*", // external reference (absolute path /absref/foobar.json)
-    "ref_34_0.*", // non top-level definition ("#/definitions//definitions/")
-    "ref_34_1.*", // non top-level definition ("#/definitions//definitions/")
     "ref_5_1.*", // not related to external ref, but js2n doesn't properly ignore other components
                  // when the `ref` field is used
     "ref_6_0.*", // reference to a local file (foo.json)
