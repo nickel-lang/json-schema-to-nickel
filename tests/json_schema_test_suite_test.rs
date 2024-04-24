@@ -3,7 +3,7 @@ use std::io::stderr;
 
 use json_schema_test_suite::{json_schema_test_suite, TestCase};
 use json_schema_to_nickel::{
-    predicates::AsPredicate, references::Environment, root_schema, wrap_contract,
+    convert, predicates::AsPredicate, references::Environment, wrap_inline_lib,
 };
 use nickel_lang_core::{
     error::{Error, EvalError},
@@ -66,11 +66,14 @@ fn translation_typecheck_test(
     test_case: TestCase,
 ) {
     let contract = if test_case.schema.is_object() {
-        root_schema(&dbg!(serde_json::from_value(test_case.schema).unwrap()))
+        convert(
+            &dbg!(serde_json::from_value(test_case.schema).unwrap()),
+            None,
+        )
     } else {
         let schema: Schema = dbg!(serde_json::from_value(test_case.schema).unwrap());
 
-        wrap_contract(
+        wrap_inline_lib(
             Environment::empty(),
             schema.as_predicate(&mut Default::default()).into(),
         )
@@ -78,7 +81,7 @@ fn translation_typecheck_test(
 
     let instance: RichTerm = serde_json::from_value(test_case.instance).unwrap();
 
-    // FIXME: this relies on `./lib/predicates.nix` being accessible from the
+    // FIXME: this relies on `./lib/predicates.ncl` being accessible from the
     // working directory
     let program = format!("{} | ({})", instance, contract);
     eprintln!("{}", program);

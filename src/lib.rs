@@ -33,6 +33,7 @@ use nickel_lang_core::{
 use predicates::Predicate;
 use references::Environment;
 use schemars::schema::RootSchema;
+use std::ffi::OsString;
 
 /// The top-level variable storing the json-schema-to-nickel predicate library included by default
 /// in any generated contract.
@@ -52,19 +53,27 @@ pub const MANGLING_PREFIX: &str = "_js2n__-";
 /// Convert a [`RootSchema`] into a Nickel contract. If the JSON schema is
 /// representable as a lazy record contract, this conversion is preferred.
 /// Otherwise, we fall back to generating a predicate.
-pub fn root_schema(root_schema: &RootSchema) -> RichTerm {
+///
+/// If a `path` is provided, the json-schema-to-nickel predicate Nickel library will be imported
+/// from this path. Otherwise, the library will be inlined in the contract, making it standalone.
+pub fn convert(root_schema: &RootSchema, library_path: Option<OsString>) -> RichTerm {
     let (contract, refs_usage) = Contract::from_root_schema(root_schema).unwrap_or_else(|| {
         let (predicate, refs_usage) = Predicate::from_root_schema(root_schema);
         (Contract::from(predicate), refs_usage)
     });
 
     let env = Environment::new(root_schema, refs_usage);
-    wrap_contract(env, contract)
+
+    if let Some(path) = library_path {
+        wrap_import_lib(env, contract, path)
+    } else {
+        wrap_inline_lib(env, contract)
+    }
 }
 
-/// Wrap a Nickel contract making use of the predicates support library and
-/// recursive definitions recorded in `env`.
-pub fn wrap_contract(env: Environment, contract: Contract) -> RichTerm {
+/// Wrap a converted contract in the given environment and inline the predicate library in a
+/// let-binding at the top-level of the wrapped contract.
+pub fn wrap_inline_lib(env: Environment, contract: Contract) -> RichTerm {
     let lib_ncl = include_bytes!(concat!(env!("OUT_DIR"), "/predicates.ncl"));
     let lib_ncl = String::from_utf8_lossy(lib_ncl);
 
@@ -80,6 +89,17 @@ pub fn wrap_contract(env: Environment, contract: Contract) -> RichTerm {
     Term::Let(
         PREDICATES_LIBRARY_ID.into(),
         lib_rt,
+        env.wrap(contract.into()),
+        Default::default(),
+    )
+    .into()
+}
+
+/// Import the predicate library in a let-binding at the top-level of a converted contract.
+pub fn wrap_import_lib(env: Environment, contract: Contract, path: OsString) -> RichTerm {
+    Term::Let(
+        PREDICATES_LIBRARY_ID.into(),
+        Term::Import(path).into(),
         env.wrap(contract.into()),
         Default::default(),
     )
