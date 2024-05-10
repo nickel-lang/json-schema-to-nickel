@@ -86,14 +86,17 @@ fn translation_typecheck_test(
     let program = format!("{} | ({})", instance, contract);
     eprintln!("{}", program);
 
-    let actual =
+    let mut prog =
         Program::<CBNCache>::new_from_source(StringReader::new(&program), "test", stderr())
-            .unwrap()
-            .eval_full();
+        .unwrap();
+    let actual = prog.eval_full();
 
     match (test_case.is_valid, actual) {
         (true, Ok(_)) => {}
-        (true, Err(e)) => panic!("expected success, got evaluation error {e:#?}"),
+        (true, Err(e)) => {
+            prog.report(e, nickel_lang_core::error::report::ErrorFormat::Text);
+            panic!("expected success, got evaluation error");
+        }
         // For now, experience shows that a contract failure can be one of those three errors:
         // field missing, missing field def, or generic contract error (blame error)
         (false, Err(Error::EvalError(EvalError::BlameError { .. })))
