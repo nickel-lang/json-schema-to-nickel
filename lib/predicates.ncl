@@ -85,7 +85,7 @@
     = fun pred x =>
       pred x |> match {
         'Ok => 'Err "Inverted predicate succeeded unexpectedly",
-        'Err _ => 'Ok
+        'Err msg => 'Ok
       },
 
   ifThenElse
@@ -97,7 +97,7 @@
     = fun i t e x =>
       i x |> match {
         'Ok => t x,
-        'Err _ => e x
+        'Err msg => e x
       },
 
   enum
