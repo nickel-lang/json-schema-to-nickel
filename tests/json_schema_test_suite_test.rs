@@ -88,7 +88,7 @@ fn translation_typecheck_test(
 
     let mut prog =
         Program::<CBNCache>::new_from_source(StringReader::new(&program), "test", stderr())
-        .unwrap();
+            .unwrap();
     let actual = prog.eval_full();
 
     match (test_case.is_valid, actual) {
