@@ -1,67 +1,60 @@
 {
   arrayOf
-    : (Dyn -> { success : Bool, error : String }) -> Dyn -> { success : Bool, error : String }
+    : (Dyn -> [| 'Ok, 'Err String |]) -> Dyn -> [| 'Ok, 'Err String |]
     | doc m%"
       Apply a predicate to all elements of an array, succeeding if all
-      applications succeed. If the value isn't an array, fail.
+      applications succeed.
     "%
     = fun pred x =>
       if !std.is_array x then
-        { success = true, error = "" }
+        'Ok
       else
         let x = x | Array Dyn in
         x
         |> std.array.fold_right
           (
-            fun x acc =>
-              let result = pred x in
-              if !result.success then
-                result
-              else
-                acc
+            fun x acc => pred x |> match {
+              'Ok => acc,
+              'Err msg => 'Err msg,
+            }
           )
-          { success = true, error = "" },
+          'Ok,
 
   contains
-    : (Dyn -> { success : Bool, error : String }) -> Dyn -> { success : Bool, error : String }
+    : (Dyn -> [| 'Ok, 'Err String |]) -> Dyn -> [| 'Ok, 'Err String |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.6]
     "%
     = fun pred x =>
       if !std.is_array x then
-        { success = true, error = "" }
+        'Ok
       else
         let x = x | Array Dyn in
         x
         |> std.array.fold_right
           (
-            fun x acc =>
-              let result = pred x in
-              if result.success || acc.success then
-                { success = true, errors = [] }
-              else
-                { success = false, errors = ["  - %{result.error}"] @ acc.errors }
-          )
-          { success = false, errors = [] }
-        |> (
-          fun result =>
-            if result.success then
-              { success = true, error = "" }
-            else
-              {
-                success = false,
-                error = "contains: no elements matched\n%{std.string.join "\n" result.errors}"
+            fun x acc => acc |> match {
+              'Ok => 'Ok,
+              'Errs msgs => pred x |> match {
+                'Ok => 'Ok,
+                'Err msg => 'Errs (["  - %{msg}"] @ msgs),
               }
-        ),
+            }
+          )
+          ('Errs [])
+        |> match {
+          'Ok => 'Ok,
+          'Errs msgs => 'Err "contains: no elements matched\n%{std.string.join "\n" msgs}"
+        },
 
   items
-    : Array (Dyn -> { success : Bool, error : String }) -> Dyn -> { success : Bool, error : String }
+    : Array (Dyn -> [| 'Ok, 'Err String |]) -> Dyn -> [| 'Ok, 'Err String |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.1]
     "%
     = fun preds x =>
       if !std.is_array x then
-        { success = true, error = "" }
+        'Ok
       else
         let x = x | Array Dyn in
         let length_to_check = std.number.min (std.array.length preds) (std.array.length x) in
@@ -69,61 +62,60 @@
         |> std.array.fold_right
           (
             fun i acc =>
-              let result = (std.array.at i preds) (std.array.at i x) in
-              if !result.success then
-                result
-              else
-                acc
+              (std.array.at i preds) (std.array.at i x) |> match {
+                'Err msg => 'Err msg,
+                'Ok => acc
+              }
           )
-          { success = true, error = "" },
+          'Ok,
 
   additionalItems
-    : (Dyn -> { success : Bool, error : String }) -> Number -> Dyn -> { success : Bool, error : String }
+    : (Dyn -> [| 'Ok, 'Err String |]) -> Number -> Dyn -> [| 'Ok, 'Err String |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.2]
     "%
     = fun pred start x =>
       if !std.is_array x then
-        { success = true, error = "" }
+        'Ok
       else
         let x = x | Array Dyn in
         let value_length = std.array.length x in
         if start >= value_length then
-          { success = true, error = "" }
+          'Ok
         else
           (std.array.slice start value_length x | Dyn)
           |> arrayOf pred,
 
   maxItems
-    : Number -> Dyn -> { success : Bool, error : String }
+    : Number -> Dyn -> [| 'Ok, 'Err String |]
     | doc m%"
       `maxItems n x` fails if `x` is an array of length strictly greater than `n` and succeeds otherwise.
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.3]
     "%
     = fun n x =>
       if !std.is_array x then
-        { success = true, error = "" }
+        'Ok
       else if std.array.length (x | Array Dyn) > n then
-        { success = false, error = "array is longer than %{std.string.from_number n} items" }
+        'Err "array is longer than %{std.string.from_number n} items"
       else
-        { success = true, error = "" },
+        'Ok,
 
   minItems
-    : Number -> Dyn -> { success : Bool, error : String }
+    : Number -> Dyn -> [| 'Ok, 'Err String |]
     | doc m%"
       `minItems n x` fails if `x` is an array of length strictly smaller than `n` and succeeds otherwise.
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.4]
     "%
     = fun n x =>
       if !std.is_array x then
-        { success = true, error = "" }
+        'Ok
       else if std.array.length (x | Array Dyn) < n then
-        { success = false, error = "array is shorter than %{std.string.from_number n} items" }
+        'Err "array is shorter than %{std.string.from_number n} items"
       else
-        { success = true, error = "" },
+        'Ok,
 
   uniqueItems
-    : Dyn -> { success : Bool, error : String }
+    : Dyn -> [| 'Ok, 'Err String |]
     | doc m%"
       Succeeds for any array if its elements are pairwise distinct.
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.5]
@@ -154,13 +146,13 @@
         in
       fun x =>
         if !std.is_array x then
-          { success = true, error = "" }
+          'Ok
         else
           let { has_duplicate, duplicate, .. } = find_duplicate (x | Array Dyn)
           in
           if has_duplicate then
-            { success = false, error = "duplicate found: %{std.serialize 'Json duplicate}" }
+            'Err "duplicate found: %{std.serialize 'Json duplicate}"
           else
-            { success = true, error = "" },
+            'Ok
 }
 
