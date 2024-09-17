@@ -15,7 +15,7 @@
 //! There are two different kinds of references:
 //!
 //! - references to top-level definitions in a schema. JSON schemas can contain a set of
-//! definitions at the top level and reference them from other parts of the schema.
+//!   definitions at the top level and reference them from other parts of the schema.
 //! - references to other properties of the schema.
 //!
 //! In both cases, in order to resolve references, we might need either the contract or the
@@ -644,7 +644,7 @@ impl RefsUsage {
 /// # Arguments
 ///
 /// - `reference`: the JSON schema reference to resolve. It must be a valid URI. Currently only
-/// local references are supported (i.e. URI starting with `#/`).
+///   local references are supported (i.e. URI starting with `#/`).
 /// - `refs_usage`: the state used to record which references are actually used, and
 ///   how. `resolve_ref` will record this usage accordingly
 /// - `usage`: the context in which the reference is used. Some contexts requires a predicate,
