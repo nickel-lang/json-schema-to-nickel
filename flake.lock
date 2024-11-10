@@ -18,11 +18,11 @@
     },
     "crane": {
       "locked": {
-        "lastModified": 1729741221,
-        "narHash": "sha256-8AHZZXs1lFkERfBY0C8cZGElSo33D/et7NKEpLRmvzo=",
+        "lastModified": 1731098351,
+        "narHash": "sha256-HQkYvKvaLQqNa10KEFGgWHfMAbWBfFp+4cAgkut+NNE=",
         "owner": "ipetkov",
         "repo": "crane",
-        "rev": "f235b656ee5b2bfd6d94c3bfd67896a575d4a6ed",
+        "rev": "ef80ead953c1b28316cc3f8613904edc2eb90c28",
         "type": "github"
       },
       "original": {
@@ -75,11 +75,11 @@
         "rust-analyzer-src": "rust-analyzer-src"
       },
       "locked": {
-        "lastModified": 1729924178,
-        "narHash": "sha256-ZhDqOYZwx0kYg1vPrmZ2fJm/wem739eNSSK+GlzdeqA=",
+        "lastModified": 1731133750,
+        "narHash": "sha256-gZ3m8e176ai+akwiayg7Mve73rcUCD0+l6OMMFhGEYI=",
         "owner": "nix-community",
         "repo": "fenix",
-        "rev": "e831b4d256526cc56bd37c7c579842866410bebc",
+        "rev": "87e4581cdfecbac602220fe76c67b37d2d1ee995",
         "type": "github"
       },
       "original": {
@@ -246,11 +246,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1729871978,
-        "narHash": "sha256-NkCjBZUuIg8F7o2TfybMu1LK1D0tV5UtoI0O0Cdy94c=",
+        "lastModified": 1730865479,
+        "narHash": "sha256-9FCVi3q1c4wRc2i4spS1QUN74ypZ4WSk2kiW+mZek5A=",
         "owner": "tweag",
         "repo": "nickel",
-        "rev": "0101a765b0a2ebfc8dc376de955fa6c1a9a273ba",
+        "rev": "107da33328478fce725082a1774a7b34ffe2ea9e",
         "type": "github"
       },
       "original": {
@@ -370,11 +370,11 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1729850857,
-        "narHash": "sha256-WvLXzNNnnw+qpFOmgaM3JUlNEH+T4s22b5i2oyyCpXE=",
+        "lastModified": 1730958623,
+        "narHash": "sha256-JwQZIGSYnRNOgDDoIgqKITrPVil+RMWHsZH1eE1VGN0=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "41dea55321e5a999b17033296ac05fe8a8b5a257",
+        "rev": "85f7e662eda4fa3a995556527c87b2524b691933",
         "type": "github"
       },
       "original": {
@@ -451,11 +451,11 @@
     "rust-analyzer-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1729845655,
-        "narHash": "sha256-6I3gJLnOLnUIWFUlEnvC0FdzX8Xwu+y3Vo0q4VB6Wbk=",
+        "lastModified": 1731056261,
+        "narHash": "sha256-TPeXChHVcaCBAoE349K7OZH4We5/2ys1GgG4IiwjwOs=",
         "owner": "rust-lang",
         "repo": "rust-analyzer",
-        "rev": "f4466718b838de706d74e2c13f20a41c034d87a5",
+        "rev": "dd9cd22514cb1001a0a2374b36a85eb75245f27b",
         "type": "github"
       },
       "original": {
@@ -541,19 +541,45 @@
         "flake-utils": "flake-utils_2",
         "nix-filter": "nix-filter",
         "nixpkgs": "nixpkgs_3",
-        "rust-overlay": "rust-overlay_2"
+        "rust-overlay": "rust-overlay_2",
+        "tree-sitter-nickel-input": "tree-sitter-nickel-input"
       },
       "locked": {
-        "lastModified": 1729789716,
-        "narHash": "sha256-Rs7fAmmiJ2aJcrMTq4OmH4W7hzYYdB4tajSdbOPndIM=",
+        "lastModified": 1730997368,
+        "narHash": "sha256-T4Jw64beU3U6AmT+I3VnLE73vWOXBenuYIWt85qXyJU=",
         "owner": "tweag",
         "repo": "topiary",
-        "rev": "f68cfd4db2e400f7178b778a1ee23dd8d4e02c5c",
+        "rev": "ba8a2e0ce388b8a2f98b3f7cf3b310b33ce74623",
         "type": "github"
       },
       "original": {
         "owner": "tweag",
         "repo": "topiary",
+        "type": "github"
+      }
+    },
+    "tree-sitter-nickel-input": {
+      "inputs": {
+        "flake-utils": [
+          "topiary",
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "topiary",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1723707504,
+        "narHash": "sha256-IvlUwNO/wLLPuqCZf0NtSxMdDx+4ASYYOobklY/97aQ=",
+        "owner": "nickel-lang",
+        "repo": "tree-sitter-nickel",
+        "rev": "88d836a24b3b11c8720874a1a9286b8ae838d30a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nickel-lang",
+        "repo": "tree-sitter-nickel",
         "type": "github"
       }
     }
