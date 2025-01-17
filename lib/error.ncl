@@ -1,47 +1,43 @@
 # Helpers for annotating error data
 {
   at_field
-    : String -> {
-      message : String,
-      source
-        : Array [|
-          'Array Number,
-          'Field String
-        |]
-    } -> {
-      message : String,
-      source : Array [| 'Array Number, 'Field String |]
-    }
-    | doc "Attaches a given field name to the given error source"
-    = fun field error =>
-      {
-        message = error.message,
-        source =
-          std.array.append
-            ('Field field)
-            error.source
+    | doc m%"
+      Attaches a given field name to the error source of this result, if it is
+      an `'Error`. Returns the result unchanged if it is an `'Ok`.
+    "%
+    = fun field =>
+      match {
+        'Ok => 'Ok,
+        'Error error =>
+          'Error {
+            message = error.message,
+            source =
+              std.array.append
+                ('Field field)
+                error.source
+          },
       },
 
   at_index
-    : Number -> {
-      message : String,
-      source
-        : Array [|
-          'Array Number,
-          'Field String
-        |]
-    } -> { message : String, source : Array [| 'Array Number, 'Field String |] }
-    | doc "Appends an array access to the given error source"
-    = fun index error =>
-      {
-        message = error.message,
-        source =
-          std.array.append
-            ('Array index)
-            error.source
+    | doc m%"
+        Appends an array access at the specificed index to the error source of
+        this result, if it is an `'Error`. Returns the result unchanged if it is
+        an `'Ok`.
+      "%
+    = fun index =>
+      match {
+        'Ok => 'Ok,
+        'Error error =>
+          'Error {
+            message = error.message,
+            source =
+              std.array.append
+                ('Array index)
+                error.source
+          },
       },
 
-  source_as_json_pointer
+  source_to_string
     : {
       message : String,
       source
@@ -50,13 +46,108 @@
           'Field String
         |]
     } -> String
-    | doc "Returns a JSON pointer corresponding to this error's source"
+    | doc "Renders an error source location as a string."
     = fun { source, .. } =>
       source
       |> std.array.map (match {
-        'Array index => std.string.from_number index,
+        'Array index => "[%{std.string.from_number index}]",
         'Field field => field,
       }
       )
-      |> std.string.join "/",
+      |> std.string.join ".",
+
+  combine
+    | doc m%"
+        Combines an array of errors into a single error with a given initial message.
+        Every error messages will be listed after the initial message together
+        with their source rendered as a JSON pointer.
+      "%
+    = fun init_msg errors =>
+      let msgs =
+        errors
+        |> std.array.map (fun error => " • %{error_to_string error}")
+        |> std.string.join "\n"
+      in
+      {
+        message = "%{init_msg}\n%{msgs}",
+        source = [],
+      },
+
+  error_to_string
+    | doc m%"
+      Converts an error to a string representation, including the source.
+    "%
+    = fun error =>
+          let location =
+            if error.source == [] then
+              ""
+            else
+              "at %{source_to_string error}: "
+          in
+          "%{location}%{error.message}",
+
+  to_validator_result
+    | doc m%"
+      Converts a json-schema-to-nickel result type to the error type expected
+      from validators in the Nickel stdlib.
+    "%
+    = match {
+      'Ok => 'Ok,
+      'Error error =>
+        'Error {
+          message = error_to_string error,
+          notes = [],
+        } | _,
+    },
 }
+# We have to type the top-level record if we want to be able to import use this
+# library in typed code elswhere
+  : {
+    at_field
+      : String -> [|
+        'Ok,
+        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+      |] -> [|
+        'Ok,
+        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+      |],
+
+    at_index
+      : Number -> [|
+        'Ok,
+        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+      |] -> [|
+        'Ok,
+        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+      |],
+
+    combine
+      : String -> Array {
+        message : String,
+        source : Array [| 'Array Number, 'Field String |]
+      } -> {
+        message : String,
+        source : Array [| 'Array Number, 'Field String |]
+      },
+
+    error_to_string
+      : {
+        message : String,
+        source : Array [| 'Array Number, 'Field String |]
+      } -> String,
+
+    to_validator_result
+      : [|
+        'Ok,
+        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+      |] -> [|
+        'Ok,
+        'Error { message | String | optional, notes | Array String | optional },
+      |],
+
+    source_to_string
+      : {
+        message : String,
+        source : Array [| 'Array Number, 'Field String |]
+      } -> String,
+  }

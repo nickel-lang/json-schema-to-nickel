@@ -1,24 +1,15 @@
+let error_lib = import "./error.ncl" in
+
 {
   arrayOf
     : (
       Dyn -> [|
         'Ok,
-        'Err {
-          message : String,
-          source
-            : Array [|
-              'Array Number,
-              'Field String
-            |]
-        }
+        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
       |]
     ) -> Dyn -> [|
       'Ok,
-      'Err {
-        message : String,
-        source
-          : Array [| 'Array Number, 'Field String |]
-      }
+      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
     |]
     | doc m%"
       Apply a predicate to all elements of an array, succeeding if all
@@ -30,18 +21,24 @@
       else
         let x = x | Array Dyn in
         x
+        |> std.array.map_with_index (fun idx elt => { index = idx, value = elt })
         |> std.array.fold_right
-          (fun x acc =>
-            pred x
-            |> match {
-              'Ok => acc,
-              'Err msg => 'Err msg,
-            }
+          (fun { index, value } acc =>
+            pred value
+            |> error_lib.at_index index
           )
           'Ok,
 
   contains
-    : (Dyn -> [| 'Ok, 'Err String |]) -> Dyn -> [| 'Ok, 'Err String |]
+    : (
+      Dyn -> [|
+        'Ok,
+        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+      |]
+    ) -> Dyn -> [|
+      'Ok,
+      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+    |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.6]
     "%
@@ -56,22 +53,31 @@
             acc
             |> match {
               'Ok => 'Ok,
-              'Errs msgs =>
+              'Errors errors =>
                 pred x
                 |> match {
                   'Ok => 'Ok,
-                  'Err msg => 'Errs (["  - %{msg}"] @ msgs),
+                  'Error error => 'Errors (std.array.prepend error errors),
                 }
             }
           )
-          ('Errs [])
+          ('Errors [])
         |> match {
           'Ok => 'Ok,
-          'Errs msgs => 'Err "contains: no elements matched\n%{std.string.join "\n" msgs}"
+          'Errors errors =>
+            'Error (error_lib.combine "contains: no elements matched" errors),
         },
 
   items
-    : Array (Dyn -> [| 'Ok, 'Err String |]) -> Dyn -> [| 'Ok, 'Err String |]
+    : Array (
+      Dyn -> [|
+        'Ok,
+        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+      |]
+    ) -> Dyn -> [|
+      'Ok,
+      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+    |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.1]
     "%
@@ -85,15 +91,24 @@
         |> std.array.fold_right
           (fun i acc =>
             (std.array.at i preds) (std.array.at i x)
+            |> error_lib.at_index i
             |> match {
-              'Err msg => 'Err msg,
-              'Ok => acc
+              'Ok => acc,
+              err @ ('Error msg) => err,
             }
           )
           'Ok,
 
   additionalItems
-    : (Dyn -> [| 'Ok, 'Err String |]) -> Number -> Dyn -> [| 'Ok, 'Err String |]
+    : (
+      Dyn -> [|
+        'Ok,
+        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+      |]
+    ) -> Number -> Dyn -> [|
+      'Ok,
+      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+    |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.2]
     "%
@@ -110,7 +125,10 @@
           |> arrayOf pred,
 
   maxItems
-    : Number -> Dyn -> [| 'Ok, 'Err String |]
+    : Number -> Dyn -> [|
+      'Ok,
+      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+    |]
     | doc m%"
       `maxItems n x` fails if `x` is an array of length strictly greater than `n` and succeeds otherwise.
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.3]
@@ -119,12 +137,18 @@
       if !std.is_array x then
         'Ok
       else if std.array.length (x | Array Dyn) > n then
-        'Err "array is longer than %{std.string.from_number n} items"
+        'Error {
+          message = "array is longer than %{std.string.from_number n} items",
+          source = [],
+        }
       else
         'Ok,
 
   minItems
-    : Number -> Dyn -> [| 'Ok, 'Err String |]
+    : Number -> Dyn -> [|
+      'Ok,
+      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+    |]
     | doc m%"
       `minItems n x` fails if `x` is an array of length strictly smaller than `n` and succeeds otherwise.
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.4]
@@ -133,12 +157,18 @@
       if !std.is_array x then
         'Ok
       else if std.array.length (x | Array Dyn) < n then
-        'Err "array is shorter than %{std.string.from_number n} items"
+        'Error {
+          message = "array is shorter than %{std.string.from_number n} items",
+          source = [],
+        }
       else
         'Ok,
 
   uniqueItems
-    : Dyn -> [| 'Ok, 'Err String |]
+    : Dyn -> [|
+      'Ok,
+      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+    |]
     | doc m%"
       Succeeds for any array if its elements are pairwise distinct.
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.5]
@@ -148,7 +178,7 @@
         : Array Dyn -> { has_duplicate : Bool, duplicate : Dyn, seen : { _ : Bool } }
         | doc m%"
             Try to find a duplicate in an array of Nickel values. For
-            efficienyc, this function uses JSON serialization to index into
+            efficiency, this function uses JSON serialization to index into
             a Nickel record. Consequently all values in the array must be
             serializable to JSON.
           "%
@@ -173,7 +203,10 @@
           let { has_duplicate, duplicate, .. } = find_duplicate (x | Array Dyn)
           in
           if has_duplicate then
-            'Err "duplicate found: %{std.serialize 'Json duplicate}"
+            'Error {
+              message = "duplicate found: %{std.serialize 'Json duplicate}",
+              source = [],
+            }
           else
             'Ok
 }
