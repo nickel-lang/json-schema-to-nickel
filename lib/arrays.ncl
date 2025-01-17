@@ -1,6 +1,25 @@
 {
   arrayOf
-    : (Dyn -> [| 'Ok, 'Err String |]) -> Dyn -> [| 'Ok, 'Err String |]
+    : (
+      Dyn -> [|
+        'Ok,
+        'Err {
+          message : String,
+          source
+            : Array [|
+              'Array Number,
+              'Field String
+            |]
+        }
+      |]
+    ) -> Dyn -> [|
+      'Ok,
+      'Err {
+        message : String,
+        source
+          : Array [| 'Array Number, 'Field String |]
+      }
+    |]
     | doc m%"
       Apply a predicate to all elements of an array, succeeding if all
       applications succeed.
@@ -12,8 +31,9 @@
         let x = x | Array Dyn in
         x
         |> std.array.fold_right
-          (
-            fun x acc => pred x |> match {
+          (fun x acc =>
+            pred x
+            |> match {
               'Ok => acc,
               'Err msg => 'Err msg,
             }
@@ -32,13 +52,16 @@
         let x = x | Array Dyn in
         x
         |> std.array.fold_right
-          (
-            fun x acc => acc |> match {
+          (fun x acc =>
+            acc
+            |> match {
               'Ok => 'Ok,
-              'Errs msgs => pred x |> match {
-                'Ok => 'Ok,
-                'Err msg => 'Errs (["  - %{msg}"] @ msgs),
-              }
+              'Errs msgs =>
+                pred x
+                |> match {
+                  'Ok => 'Ok,
+                  'Err msg => 'Errs (["  - %{msg}"] @ msgs),
+                }
             }
           )
           ('Errs [])
@@ -60,12 +83,12 @@
         let length_to_check = std.number.min (std.array.length preds) (std.array.length x) in
         std.array.range 0 length_to_check
         |> std.array.fold_right
-          (
-            fun i acc =>
-              (std.array.at i preds) (std.array.at i x) |> match {
-                'Err msg => 'Err msg,
-                'Ok => acc
-              }
+          (fun i acc =>
+            (std.array.at i preds) (std.array.at i x)
+            |> match {
+              'Err msg => 'Err msg,
+              'Ok => acc
+            }
           )
           'Ok,
 
@@ -131,19 +154,18 @@
           "%
         =
           std.array.fold_right
-            (
-              fun elt acc =>
-                if acc.has_duplicate then
-                  acc
+            (fun elt acc =>
+              if acc.has_duplicate then
+                acc
+              else
+                let index = std.serialize 'Json elt in
+                if std.record.has_field index acc.seen then
+                  { has_duplicate = true, duplicate = elt, seen = acc.seen }
                 else
-                  let index = std.serialize 'Json elt in
-                  if std.record.has_field index acc.seen then
-                    { has_duplicate = true, duplicate = elt, seen = acc.seen }
-                  else
-                    { has_duplicate = false, duplicate = null, seen = std.record.insert index true acc.seen }
+                  { has_duplicate = false, duplicate = null, seen = std.record.insert index true acc.seen }
             )
             { has_duplicate = false, duplicate = null, seen = {} }
-        in
+      in
       fun x =>
         if !std.is_array x then
           'Ok
@@ -155,4 +177,3 @@
           else
             'Ok
 }
-
