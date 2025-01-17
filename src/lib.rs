@@ -26,9 +26,10 @@ pub(crate) mod utils;
 
 use contracts::Contract;
 use nickel_lang_core::{
+    cache::InputFormat,
     cache::{Cache, ErrorTolerance, SourcePath},
     parser::{grammar::TermParser, lexer::Lexer, ErrorTolerantParser},
-    term::{RichTerm, Term},
+    term::{make::let_one_in, RichTerm, Term},
 };
 use predicates::Predicate;
 use references::Environment;
@@ -86,22 +87,17 @@ pub fn wrap_inline_lib(env: Environment, contract: Contract) -> RichTerm {
     let lexer = Lexer::new(cache.source(file_id));
     let lib_rt = parser.parse_strict(file_id, lexer).unwrap();
 
-    Term::Let(
-        PREDICATES_LIBRARY_ID.into(),
-        lib_rt,
-        env.wrap(contract.into()),
-        Default::default(),
-    )
-    .into()
+    let_one_in(PREDICATES_LIBRARY_ID, lib_rt, env.wrap(contract.into()))
 }
 
 /// Import the predicate library in a let-binding at the top-level of a converted contract.
 pub fn wrap_import_lib(env: Environment, contract: Contract, path: OsString) -> RichTerm {
-    Term::Let(
-        PREDICATES_LIBRARY_ID.into(),
-        Term::Import(path).into(),
+    let_one_in(
+        PREDICATES_LIBRARY_ID,
+        Term::Import {
+            path,
+            format: InputFormat::Nickel,
+        },
         env.wrap(contract.into()),
-        Default::default(),
     )
-    .into()
 }

@@ -12,7 +12,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 clap = { version = "^4.3", features = ["derive"] }
 fluent-uri = "0.1.4"
-nickel-lang-core = { git = "https://github.com/tweag/nickel", rev = "refs/heads/master", default-features = false }
+nickel-lang-core = { version = "0.10", default-features = false }
 
 pretty = "^0.11"
 schemars = "^0.8"
@@ -21,7 +21,7 @@ terminal_size = "^0.2"
 
 [build-dependencies]
 # TODO: make this definitionally the same as the non-build dependency
-nickel-lang-core = { git = "https://github.com/tweag/nickel", rev = "refs/heads/master", default-features = false }
+nickel-lang-core = { version = "0.10", default-features = false }
 
 [dev-dependencies]
 json_schema_test_suite = "^0.3"
