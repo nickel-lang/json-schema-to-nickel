@@ -59,8 +59,8 @@
   combine
     | doc m%"
         Combines an array of errors into a single error with a given initial message.
-        Every error messages will be listed after the initial message together
-        with their source rendered as a JSON pointer.
+        Each error message will be listed after the initial message together
+        with their source rendered as a path.
       "%
     = fun init_msg errors =>
       let msgs =
@@ -78,13 +78,13 @@
       Converts an error to a string representation, including the source.
     "%
     = fun error =>
-          let location =
-            if error.source == [] then
-              ""
-            else
-              "at %{source_to_string error}: "
-          in
-          "%{location}%{error.message}",
+      let location =
+        if error.source == [] then
+          ""
+        else
+          "at %{source_to_string error}: "
+      in
+      "%{location}%{error.message}",
 
   to_validator_result
     | doc m%"
@@ -99,9 +99,19 @@
           notes = [],
         } | _,
     },
+
+  mk_error
+    | doc m%"
+      Creates a fresh error with a given message and an empty source.
+    "%
+    = fun message =>
+      'Error {
+        message = message,
+        source = [],
+      },
 }
-# We have to type the top-level record if we want to be able to import use this
-# library in typed code elswhere
+# We have to type the top-level record if we want to be able to use this library
+# in typed code elswhere
   : {
     at_field
       : String -> [|
@@ -150,4 +160,10 @@
         message : String,
         source : Array [| 'Array Number, 'Field String |]
       } -> String,
+
+    mk_error
+      : String -> [|
+        'Ok,
+        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
+      |],
   }

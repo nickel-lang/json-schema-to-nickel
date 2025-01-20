@@ -14,10 +14,7 @@ let error_lib = import "./error.ncl" in
       if !std.is_record x then
         'Ok
       else if std.record.length (x | { _ : Dyn }) > n then
-        'Error {
-          message = "record contains more than %{std.string.from_number n} fields",
-          source = [],
-        }
+        error_lib.mk_error "record contains more than %{std.string.from_number n} fields"
       else
         'Ok,
 
@@ -34,10 +31,7 @@ let error_lib = import "./error.ncl" in
       if !std.is_record x then
         'Ok
       else if std.record.length (x | { _ : Dyn }) < n then
-        'Error {
-          message = "record contains fewer than %{std.string.from_number n} fields",
-          source = [],
-        }
+        error_lib.mk_error "record contains fewer than %{std.string.from_number n} fields"
       else
         'Ok,
 
@@ -57,10 +51,7 @@ let error_lib = import "./error.ncl" in
         |> std.array.fold_right
           (fun field acc =>
             if !std.record.has_field field (x | { _ : Dyn }) then
-              'Error {
-                message = "missing required field %{field}",
-                source = [],
-              }
+              error_lib.mk_error "missing required field %{field}"
             else
               acc
           )
@@ -195,16 +186,17 @@ let error_lib = import "./error.ncl" in
           |]
           =
             if !additionalAllowed && !std.record.is_empty remaining_fields then
-              'Error {
-                message = "extra fields %{std.serialize 'Json (std.record.fields remaining_fields | Dyn)}",
-                source = [],
-              }
+              error_lib.mk_error "extra fields %{std.serialize 'Json (std.record.fields remaining_fields | Dyn)}"
             else
               std.record.to_array remaining_fields
               |> std.array.fold_right
                 (fun { field, value } acc =>
                   additionalProperties value
                   |> error_lib.at_field field
+                  |> match {
+                    'Ok => acc,
+                    error @ ('Error _) => error,
+                  }
                 )
                 'Ok
         in
@@ -268,10 +260,7 @@ let error_lib = import "./error.ncl" in
           |> std.array.fold_right
             (fun field acc =>
               if !std.record.has_field field x then
-                'Error {
-                  message = "expected field `%{field}`",
-                  source = [],
-                }
+                error_lib.mk_error "expected field `%{field}`"
               else
                 acc
             )

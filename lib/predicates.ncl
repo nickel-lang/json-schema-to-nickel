@@ -15,14 +15,17 @@ let error_lib = import "./error.ncl" in
       if pred x then
         'Ok
       else
-        'Error { message = msg, source = [] },
+        error_lib.mk_error msg,
 
   never
     : Dyn -> [|
       'Ok,
       'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
     |]
-    = std.function.const ('Error { message = "never", source = [] }),
+    =
+      "never"
+      |> error_lib.mk_error
+      |> std.function.const,
 
   always
     : Dyn -> [|
@@ -68,10 +71,7 @@ let error_lib = import "./error.ncl" in
         in
         'Error (error_lib.combine "oneOf: none of the options matched" errors)
       else if count > 1 then
-        'Error {
-          message = "oneOf: more than one of the options matched",
-          source = [],
-        }
+        error_lib.mk_error "oneOf: more than one of the options matched"
       else
         'Ok,
 
@@ -153,11 +153,7 @@ let error_lib = import "./error.ncl" in
     = fun pred x =>
       pred x
       |> match {
-        'Ok =>
-          'Error {
-            message = "Inverted predicate succeeded unexpectedly",
-            source = [],
-          },
+        'Ok => error_lib.mk_error "Inverted predicate succeeded unexpectedly",
         'Error _ => 'Ok,
       },
 
@@ -214,12 +210,7 @@ let error_lib = import "./error.ncl" in
             else
               acc
           )
-          (
-            'Error {
-              message = "expected one of %{std.serialize 'Json (values | Dyn)}",
-              source = [],
-            }
-          ),
+          (error_lib.mk_error "expected one of %{std.serialize 'Json (values | Dyn)}"),
 
   const
     : Dyn -> Dyn -> [|
@@ -234,10 +225,7 @@ let error_lib = import "./error.ncl" in
       if x == value then
         'Ok
       else
-        'Error {
-          message = "expected %{std.serialize 'Json value}",
-          source = [],
-        },
+        error_lib.mk_error "expected %{std.serialize 'Json value}",
 
   isType
     : [|

@@ -141,10 +141,7 @@ let error_lib = import "./error.ncl" in
       if !std.is_array x then
         'Ok
       else if std.array.length (x | Array Dyn) > n then
-        'Error {
-          message = "array is longer than %{std.string.from_number n} items",
-          source = [],
-        }
+        error_lib.mk_error "array is longer than %{std.string.from_number n} items"
       else
         'Ok,
 
@@ -161,10 +158,7 @@ let error_lib = import "./error.ncl" in
       if !std.is_array x then
         'Ok
       else if std.array.length (x | Array Dyn) < n then
-        'Error {
-          message = "array is shorter than %{std.string.from_number n} items",
-          source = [],
-        }
+        error_lib.mk_error "array is shorter than %{std.string.from_number n} items"
       else
         'Ok,
 
@@ -207,10 +201,7 @@ let error_lib = import "./error.ncl" in
           let { has_duplicate, duplicate, .. } = find_duplicate (x | Array Dyn)
           in
           if has_duplicate then
-            'Error {
-              message = "duplicate found: %{std.serialize 'Json duplicate}",
-              source = [],
-            }
+            error_lib.mk_error "duplicate found: %{std.serialize 'Json duplicate}"
           else
             'Ok
 }
