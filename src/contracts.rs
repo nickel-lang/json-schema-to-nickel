@@ -33,7 +33,6 @@ use nickel_lang_core::{
     label::Label,
     mk_app,
     term::{
-        array::Array,
         record::{Field, FieldMetadata, RecordAttrs, RecordData},
         LabeledType, RichTerm, Term, TypeAnnotation,
     },
@@ -80,7 +79,13 @@ impl Contract {
 
     /// Return the `Dyn` contract, always succeeding.
     pub fn dynamic() -> Self {
-        Term::Type(TypeF::Dyn.into()).into()
+        let dyn_type: Type = TypeF::Dyn.into();
+        Term::Type {
+            typ: dyn_type.clone(),
+            // We don't care about the contract here, it's a run-time cache thing.
+            contract: Term::Null.into(),
+        }
+        .into()
     }
 }
 
@@ -242,7 +247,12 @@ impl TryAsContract for SchemaObject {
                         })?;
                 Some(Contract(vec![
                     static_access("std", ["enum", "TagOrString"]),
-                    Term::Type(TypeF::Enum(enum_rows).into()).into(),
+                    Term::Type {
+                        typ: TypeF::Enum(enum_rows).into(),
+                        // We don't care about the contract here, it's a run-time cache thing.
+                        contract: Term::Null.into(),
+                    }
+                    .into(),
                 ]))
             }
             SchemaObject {
@@ -317,7 +327,7 @@ impl TryAsContract for ArrayValidation {
                 .unwrap_or_else(|| s.as_predicate_contract(refs_usage));
             if let [elt] = elt.0.as_slice() {
                 Some(Contract::from(TypeF::Array(Box::new(
-                    TypeF::Flat(elt.clone()).into(),
+                    TypeF::Contract(elt.clone()).into(),
                 ))))
             } else {
                 None
@@ -348,7 +358,7 @@ impl From<Contract> for RichTerm {
             // TODO: shouldn't need to clone here
             [rt] => rt.clone(),
             _ => {
-                let arr = Term::Array(Array::new(c.into_iter().collect()), Default::default());
+                let arr = Term::Array(c.into_iter().collect(), Default::default());
                 mk_app!(static_access("std", ["contract", "Sequence"]), arr)
             }
         }
@@ -361,9 +371,13 @@ impl From<Term> for Contract {
     }
 }
 
-impl From<TypeF<Box<Type>, RecordRows, EnumRows>> for Contract {
-    fn from(value: TypeF<Box<Type>, RecordRows, EnumRows>) -> Self {
-        Contract::from(Term::Type(Type::from(value)))
+impl From<TypeF<Box<Type>, RecordRows, EnumRows, RichTerm>> for Contract {
+    fn from(value: TypeF<Box<Type>, RecordRows, EnumRows, RichTerm>) -> Self {
+        Contract::from(Term::Type {
+            typ: Type::from(value),
+            // We don't care about the contract here, it's a run-time cache thing.
+            contract: Term::Null.into(),
+        })
     }
 }
 
@@ -397,7 +411,7 @@ impl From<Contract> for TypeAnnotation {
             contracts: value
                 .into_iter()
                 .map(|rt| LabeledType {
-                    typ: TypeF::Flat(rt).into(),
+                    typ: TypeF::Contract(rt).into(),
                     label: Label::dummy(),
                 })
                 .collect(),

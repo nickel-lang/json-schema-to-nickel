@@ -129,7 +129,7 @@ impl From<&SingleOrVec<InstanceType>> for Predicate {
             SingleOrVec::Vec(ts) => mk_app!(
                 static_access(PREDICATES_LIBRARY_ID, ["anyOf"]),
                 Term::Array(
-                    Array::new(ts.iter().map(|t| Predicate::from(t).into()).collect()),
+                    ts.iter().map(|t| Predicate::from(t).into()).collect(),
                     Default::default()
                 )
             )
@@ -145,12 +145,10 @@ impl From<&[Value]> for Predicate {
         mk_app!(
             static_access(PREDICATES_LIBRARY_ID, ["enum"]),
             Term::Array(
-                Array::new(
-                    value
-                        .iter()
-                        .map(|v| serde_json::from_value(v.clone()).unwrap())
-                        .collect()
-                ),
+                value
+                    .iter()
+                    .map(|v| serde_json::from_value(v.clone()).unwrap())
+                    .collect(),
                 Default::default()
             )
         )
@@ -238,12 +236,10 @@ impl AsPredicates for SubschemaValidation {
                 mk_app!(
                     static_access(PREDICATES_LIBRARY_ID, ["oneOf"]),
                     Term::Array(
-                        Array::new(
-                            schemas
-                                .iter()
-                                .map(|s| s.as_predicate(refs_usage).into())
-                                .collect()
-                        ),
+                        schemas
+                            .iter()
+                            .map(|s| s.as_predicate(refs_usage).into())
+                            .collect(),
                         Default::default()
                     )
                 )
@@ -393,12 +389,10 @@ impl AsPredicates for ArrayValidation {
                 [mk_app!(
                     static_access(PREDICATES_LIBRARY_ID, ["arrays", "items"]),
                     Term::Array(
-                        Array::new(
-                            schemas
-                                .iter()
-                                .map(|x| x.as_predicate(refs_usage).into())
-                                .collect()
-                        ),
+                        schemas
+                            .iter()
+                            .map(|x| x.as_predicate(refs_usage).into())
+                            .collect(),
                         Default::default()
                     )
                 )
@@ -518,7 +512,7 @@ impl AsPredicates for ObjectValidation {
                     mk_app!(
                         static_access(PREDICATES_LIBRARY_ID, ["records", "required"]),
                         Term::Array(
-                            Array::new(required.iter().map(make::string).collect()),
+                            required.iter().map(make::string).collect(),
                             Default::default()
                         )
                     )
@@ -577,7 +571,7 @@ fn dependencies(
                             v.iter().map(|s| s.as_str()).collect::<Option<Vec<_>>>()
                         }) {
                             Term::Array(
-                                Array::new(fields.into_iter().map(make::string).collect()),
+                                fields.into_iter().map(make::string).collect(),
                                 Default::default(),
                             )
                             .into()
