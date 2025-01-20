@@ -104,9 +104,9 @@
     | doc m%"
       Creates a fresh error with a given message and an empty source.
     "%
-    = fun message =>
+    = fun msg =>
       'Error {
-        message = message,
+        message = msg,
         source = [],
       },
 }
