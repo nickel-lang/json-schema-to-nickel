@@ -99,21 +99,26 @@ let error_lib = import "./error.ncl" in
         'Ok
       else
         let x = x | { _ : Dyn } in
-        let check_properties : { result : [| 'Ok, 'Error { message : String, source : Array [| 'Array Number, 'Field String |] } |], checked : { _ : Bool } } =
-          std.record.to_array properties
-          |> std.array.fold_right
-            (fun { field, value } acc =>
-              if !std.record.has_field field x then
-                acc
-              else
-                value x."%{field}"
-                |> error_lib.at_field field
-                |> match {
-                  'Ok => { result = acc.result, checked = std.record.insert field true acc.checked },
-                  error @ ('Error _) => { result = error, checked = {} },
-                }
-            )
-            { result = 'Ok, checked = {} }
+        let check_properties
+          : {
+            result : [| 'Ok, 'Error { message : String, source : Array [| 'Array Number, 'Field String |] } |],
+            checked : { _ : Bool }
+          }
+          =
+            std.record.to_array properties
+            |> std.array.fold_right
+              (fun { field, value } acc =>
+                if !std.record.has_field field x then
+                  acc
+                else
+                  value x."%{field}"
+                  |> error_lib.at_field field
+                  |> match {
+                    'Ok => { result = acc.result, checked = std.record.insert field true acc.checked },
+                    error @ ('Error _) => { result = error, checked = {} },
+                  }
+              )
+              { result = 'Ok, checked = {} }
         in
         let matching_fields : String -> { _ : Dyn } = fun pattern =>
           let matcher = std.string.is_match pattern

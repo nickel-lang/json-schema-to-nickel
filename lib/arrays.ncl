@@ -26,6 +26,10 @@ let error_lib = import "./error.ncl" in
           (fun { index, value } acc =>
             pred value
             |> error_lib.at_index index
+            |> match {
+              'Ok => acc,
+              error @ ('Error msg) => error,
+            }
           )
           'Ok,
 
