@@ -53,7 +53,7 @@
         (fun acc =>
           match {
             'Array index => "%{acc}[%{std.string.from_number index}]",
-            'Field field => "%{acc}.field",
+            'Field field => "%{acc}.%{field}",
           }
         )
         "",
