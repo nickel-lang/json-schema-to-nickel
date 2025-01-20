@@ -2,8 +2,8 @@
 {
   at_field
     | doc m%"
-      Attaches a given field name to the error source of this result, if it is
-      an `'Error`. Returns the result unchanged if it is an `'Ok`.
+      Prepend a given field name to the error source of this result, if it is an
+      `'Error`. Returns the result unchanged if it is an `'Ok`.
     "%
     = fun field =>
       match {
@@ -12,7 +12,7 @@
           'Error {
             message = error.message,
             source =
-              std.array.append
+              std.array.prepend
                 ('Field field)
                 error.source
           },
@@ -20,7 +20,7 @@
 
   at_index
     | doc m%"
-        Appends an array access at the specificed index to the error source of
+        Prepend an array access at the specificed index to the error source of
         this result, if it is an `'Error`. Returns the result unchanged if it is
         an `'Ok`.
       "%
@@ -31,7 +31,7 @@
           'Error {
             message = error.message,
             source =
-              std.array.append
+              std.array.prepend
                 ('Array index)
                 error.source
           },
@@ -49,12 +49,14 @@
     | doc "Renders an error source location as a string."
     = fun { source, .. } =>
       source
-      |> std.array.map (match {
-        'Array index => "[%{std.string.from_number index}]",
-        'Field field => field,
-      }
-      )
-      |> std.string.join ".",
+      |> std.array.fold_left
+        (fun acc =>
+          match {
+            'Array index => "%{acc}[%{std.string.from_number index}]",
+            'Field field => "%{acc}.field",
+          }
+        )
+        "",
 
   combine
     | doc m%"
