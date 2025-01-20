@@ -44,8 +44,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|(Width(w), _)| w as usize)
         .unwrap_or(80);
 
-    let types: DocBuilder<'_, _, ()> =
-        convert(&schema, args.library_path).pretty(&pretty::BoxAllocator);
+    let pretty_alloc = Allocator::default();
+    let types: DocBuilder<'_, _, ()> = convert(&schema, args.library_path).pretty(&pretty_alloc);
 
     println!("# DO NOT EDIT\n# This file was automatically generated using json-schema-to-nickel");
     types.render(size, &mut stdout())?;

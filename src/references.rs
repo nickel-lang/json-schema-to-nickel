@@ -839,8 +839,7 @@ impl Environment {
         });
 
         Term::Let(
-            ENVIRONMENT_ID.into(),
-            global_env.into(),
+            std::iter::once((ENVIRONMENT_ID.into(), global_env.into())).collect(),
             inner,
             LetAttrs {
                 rec: true,

@@ -1,6 +1,6 @@
 {
   multipleOf
-    : Number -> Dyn -> [| 'Ok, 'Err String |]
+    : Number -> Dyn -> [| 'Ok, 'Error { message : String, source : Array [| 'Array Number, 'Field String |] } |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.2.1]
     "%
@@ -10,10 +10,13 @@
       else if std.number.is_integer ((x | Number) / mult) then
         'Ok
       else
-        'Err "expected a multiple of %{std.string.from_number mult}",
+        'Error {
+          message = "expected a multiple of %{std.string.from_number mult}",
+          source = [],
+        },
 
   maximum
-    : Number -> Dyn -> [| 'Ok, 'Err String |]
+    : Number -> Dyn -> [| 'Ok, 'Error { message : String, source : Array [| 'Array Number, 'Field String |] } |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.2.2]
     "%
@@ -23,10 +26,13 @@
       else if (x | Number) <= limit then
         'Ok
       else
-        'Err "expected a maximum of %{std.string.from_number limit}",
+        'Error {
+          message = "expected a maximum of %{std.string.from_number limit}",
+          source = [],
+        },
 
   exclusiveMaximum
-    : Number -> Dyn -> [| 'Ok, 'Err String |]
+    : Number -> Dyn -> [| 'Ok, 'Error { message : String, source : Array [| 'Array Number, 'Field String |] } |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.2.3]
     "%
@@ -36,10 +42,13 @@
       else if (x | Number) < limit then
         'Ok
       else
-        'Err "expected an exclusive maximum of %{std.string.from_number limit}",
+        'Error {
+          message = "expected an exclusive maximum of %{std.string.from_number limit}",
+          source = [],
+        },
 
   minimum
-    : Number -> Dyn -> [| 'Ok, 'Err String |]
+    : Number -> Dyn -> [| 'Ok, 'Error { message : String, source : Array [| 'Array Number, 'Field String |] } |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.2.4]
     "%
@@ -49,10 +58,13 @@
       else if (x | Number) >= limit then
         'Ok
       else
-        'Err "expected a minimum of %{std.string.from_number limit}",
+        'Error {
+          message = "expected a minimum of %{std.string.from_number limit}",
+          source = [],
+        },
 
   exclusiveMinimum
-    : Number -> Dyn -> [| 'Ok, 'Err String |]
+    : Number -> Dyn -> [| 'Ok, 'Error { message : String, source : Array [| 'Array Number, 'Field String |] } |]
     | doc m%"
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.2.5]
     "%
@@ -62,6 +74,8 @@
       else if (x | Number) > limit then
         'Ok
       else
-        'Err "expected an exclusive minimum of %{std.string.from_number limit}",
+        'Error {
+          message = "expected an exclusive minimum of %{std.string.from_number limit}",
+          source = [],
+        },
 }
-

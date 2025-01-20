@@ -7,6 +7,7 @@ use std::{
 };
 
 use nickel_lang_core::{
+    cache::InputFormat,
     eval::cache::CacheImpl,
     match_sharedterm,
     program::Program,
@@ -42,7 +43,10 @@ fn inline_imports(path: impl Into<OsString>) -> Result<RichTerm, Box<dyn Error>>
     rt.traverse::<_, Box<dyn Error>>(
         &mut |subterm: RichTerm| {
             match_sharedterm!(match (subterm.term) {
-                Term::Import(import_path_rel) => {
+                Term::Import {
+                    path: import_path_rel,
+                    format: InputFormat::Nickel,
+                } => {
                     let mut import_path_abs: PathBuf = path.into();
                     import_path_abs.set_file_name(import_path_rel);
                     inline_imports(import_path_abs)
