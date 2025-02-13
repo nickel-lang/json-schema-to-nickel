@@ -268,24 +268,11 @@ let error_lib = import "./error.ncl" in
         |> error_lib.to_validator_result
       ),
 
-  contract = {
-    or_null
-      : Dyn -> Dyn
-      | doc m%"
-        For a contract `C`, `or_null C` returns a contract that allows either `C` or a null value.
-      "%
-      = fun Contract =>
-        std.contract.custom (fun label value =>
-          if value == null then
-            'Ok value
-          else
-            std.contract.check Contract label value
-        ),
+    or_null : Dyn -> Dyn = fun Contract => std.contract.custom (fun label value =>
+      if value == null then
+      'Ok value
+      else std.contract.check Contract label value
+    ),
 
-    always
-      | doc m%"
-        A contract that always succeeds. The same as `Dyn`, but with a more JSON-schema name.
-      "%
-      = std.contract.custom (fun label value => 'Ok value),
-  }
+    always_ctr : Dyn = std.contract.custom (fun label value => 'Ok value)
 }
