@@ -60,6 +60,7 @@ fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
         .any(|x| !IGNORED_FIELDS.contains(&x.as_ref()))
 }
 
+#[derive(Debug, Copy, Clone)]
 enum MaybeNull {
     NullOr(InstanceType),
     Just(InstanceType),
@@ -92,11 +93,10 @@ impl MaybeNull {
 /// value. This can be empty or many as in `a` or `a | Foo | Bar`, but this
 /// list can also be converted to a single value using `predicates.always` and
 /// std.contract.Sequence
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Contract {
     terms: Vec<RichTerm>,
     maybe_null: bool,
-    single_type: Option<InstanceType>,
 }
 
 impl Contract {
@@ -128,6 +128,13 @@ impl Contract {
         Contract {
             maybe_null: true,
             ..self
+        }
+    }
+
+    pub fn from_terms(terms: Vec<RichTerm>) -> Self {
+        Self {
+            terms,
+            maybe_null: false,
         }
     }
 }
@@ -175,7 +182,6 @@ impl TryAsContract for Schema {
             Schema::Bool(true) => Some(Contract {
                 terms: vec![],
                 maybe_null: false,
-                single_type: None,
             }),
             Schema::Bool(false) => None,
             Schema::Object(obj) => obj.try_as_contract(root_schema, refs_usage),
@@ -184,11 +190,16 @@ impl TryAsContract for Schema {
 }
 
 impl TryAsContract for SchemaObject {
-    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract> {
+    fn try_as_contract(
+        &self,
+        root_schema: &RootSchema,
+        refs_usage: &mut RefsUsage,
+    ) -> Option<Contract> {
         let instance_type = self.instance_type.as_ref().map(MaybeNull::from_types);
+        let simple_type = instance_type.as_ref().and_then(MaybeNull::inner);
 
         let ctr =
-            match (self, instance_type.as_ref().and_then(MaybeNull::inner)) {
+            match (self, simple_type) {
                 // a raw type
                 (
                     SchemaObject {
@@ -276,7 +287,7 @@ impl TryAsContract for SchemaObject {
                         extensions,
                     },
                     Some(InstanceType::Object),
-                ) if only_ignored_fields(extensions) => ov.try_as_contract(refs_usage),
+                ) if only_ignored_fields(extensions) => ov.try_as_contract(root_schema, refs_usage),
                 // Enum contract with all strings
                 // => | std.enum.TagOrString | [| 'foo, 'bar, 'baz |]
                 (
@@ -314,19 +325,15 @@ impl TryAsContract for SchemaObject {
                                     tail: Box::new(acc),
                                 }))
                             })?;
-                    Some(Contract {
-                        terms: vec![
-                            static_access("std", ["enum", "TagOrString"]),
-                            Term::Type {
-                                typ: TypeF::Enum(enum_rows).into(),
-                                // We don't care about the contract here, it's a run-time cache thing.
-                                contract: Term::Null.into(),
-                            }
-                            .into(),
-                        ],
-                        maybe_null: false,
-                        single_type: Some(InstanceType::String),
-                    })
+                    Some(Contract::from_terms(vec![
+                        static_access("std", ["enum", "TagOrString"]),
+                        Term::Type {
+                            typ: TypeF::Enum(enum_rows).into(),
+                            // We don't care about the contract here, it's a run-time cache thing.
+                            contract: Term::Null.into(),
+                        }
+                        .into(),
+                    ]))
                 }
                 (
                     SchemaObject {
@@ -344,7 +351,7 @@ impl TryAsContract for SchemaObject {
                         extensions: _,
                     },
                     Some(InstanceType::Array),
-                ) => av.try_as_contract(refs_usage),
+                ) => av.try_as_contract(root_schema, refs_usage),
                 (
                     SchemaObject {
                         metadata: _,
@@ -361,7 +368,9 @@ impl TryAsContract for SchemaObject {
                         extensions,
                     },
                     None,
-                ) if only_ignored_fields(extensions) => subschemas.try_as_contract(refs_usage),
+                ) if only_ignored_fields(extensions) => {
+                    subschemas.try_as_contract(root_schema, refs_usage)
+                }
                 _ => None,
             };
 
@@ -565,8 +574,41 @@ fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool {
     true
 }
 
+fn schema_simple_type(s: &Schema, root_schema: &RootSchema) -> Option<InstanceType> {
+    match s {
+        Schema::Bool(_) => None,
+        Schema::Object(SchemaObject {
+            instance_type: Some(instance_type),
+            ..
+        }) => MaybeNull::from_types(instance_type).inner().copied(),
+        Schema::Object(SchemaObject {
+            metadata: _,
+            instance_type: None,
+            format: None,
+            enum_values: None,
+            const_value: None,
+            subschemas: None,
+            number: None,
+            string: None,
+            array: None,
+            object: None,
+            reference: Some(reference),
+            extensions: _,
+        }) => {
+            let ptr = references::resolve_ptr(reference)?;
+            let s = ptr.resolve(root_schema)?;
+            schema_simple_type(&s, root_schema)
+        }
+        _ => None,
+    }
+}
+
 impl TryAsContract for SubschemaValidation {
-    fn try_as_contract(&self, refs_usage: &mut RefsUsage) -> Option<Contract> {
+    fn try_as_contract(
+        &self,
+        root_schema: &RootSchema,
+        refs_usage: &mut RefsUsage,
+    ) -> Option<Contract> {
         match self {
             SubschemaValidation {
                 all_of: Some(all_of),
@@ -578,13 +620,12 @@ impl TryAsContract for SubschemaValidation {
                 else_schema: None,
             } => all_of
                 .iter()
-                .map(|x| x.try_as_contract(refs_usage).map(RichTerm::from))
+                .map(|x| {
+                    x.try_as_contract(root_schema, refs_usage)
+                        .map(RichTerm::from)
+                })
                 .collect::<Option<Vec<_>>>()
-                .map(|terms| Contract {
-                    terms,
-                    maybe_null: false,
-                    single_type: None,
-                }),
+                .map(Contract::from_terms),
             SubschemaValidation {
                 all_of: None,
                 any_of: Some(any_of),
@@ -603,23 +644,20 @@ impl TryAsContract for SubschemaValidation {
                 then_schema: None,
                 else_schema: None,
             } => {
-                let ctrs = any_of
+                let types = any_of
                     .iter()
-                    .map(|x| x.try_as_contract(refs_usage))
-                    .collect::<Option<Vec<_>>>()?;
+                    .map(|s| schema_simple_type(s, root_schema))
+                    .collect::<Vec<_>>();
+                if types.iter().all(|opt| opt.is_some()) && distinct(types.into_iter()) {
+                    // FIXME: handle the case that any of them is nullable
+                    let ctrs = any_of.iter().map(|x| {
+                        x.try_as_contract(root_schema, refs_usage)
+                            .unwrap_or_else(|| x.as_predicate_contract(refs_usage))
+                    });
 
-                let types = ctrs.iter().map(|ctr| ctr.single_type);
-                if types.clone().all(|opt| opt.is_some()) && distinct(types) {
-                    let arr = Term::Array(
-                        ctrs.into_iter().map(RichTerm::from).collect(),
-                        Default::default(),
-                    );
+                    let arr = Term::Array(ctrs.map(RichTerm::from).collect(), Default::default());
                     let any_of = mk_app!(static_access("std", ["contract", "any_of"]), arr);
-                    Some(Contract {
-                        terms: vec![any_of],
-                        maybe_null: false,
-                        single_type: None,
-                    })
+                    Some(Contract::from_terms(vec![any_of]))
                 } else {
                     None
                 }
@@ -638,17 +676,13 @@ impl TryAsContract for SubschemaValidation {
 
 impl From<RichTerm> for Contract {
     fn from(rt: RichTerm) -> Self {
-        Contract {
-            terms: vec![rt],
-            maybe_null: false,
-            single_type: None,
-        }
+        Contract::from_terms(vec![rt])
     }
 }
 
 impl From<Contract> for RichTerm {
     fn from(c: Contract) -> Self {
-        let inner = match c.terms.as_slice() {
+        let ret = match c.terms.as_slice() {
             [] => static_access(PREDICATES_LIBRARY_ID, ["always_ctr"]),
             // TODO: shouldn't need to clone here
             [rt] => rt.clone(),
@@ -658,9 +692,9 @@ impl From<Contract> for RichTerm {
             }
         };
         if c.maybe_null {
-            mk_app!(static_access(PREDICATES_LIBRARY_ID, ["or_null"]), inner)
+            mk_app!(static_access(PREDICATES_LIBRARY_ID, ["or_null"]), ret)
         } else {
-            inner
+            ret
         }
     }
 }
@@ -708,15 +742,10 @@ impl From<Contract> for TypeAnnotation {
     fn from(c: Contract) -> Self {
         TypeAnnotation {
             typ: None,
-            contracts: c
-                .terms
-                .into_iter()
-                // FIXME: handle maybe_null
-                .map(|rt| LabeledType {
-                    typ: TypeF::Contract(rt).into(),
-                    label: Label::dummy(),
-                })
-                .collect(),
+            contracts: vec![LabeledType {
+                typ: TypeF::Contract(c.into()).into(),
+                label: Label::dummy(),
+            }],
         }
     }
 }

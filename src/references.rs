@@ -637,9 +637,7 @@ impl RefsUsage {
     }
 }
 
-/// Parses a JSON schema reference to a `SchemaPointer`, returning `None` and printing
-/// a warning if it's a kind of reference that we don't support.
-pub fn parse_ref(reference: &str) -> Option<SchemaPointer> {
+pub fn resolve_ptr(reference: &str) -> Option<SchemaPointer> {
     let Ok(uri) = fluent_uri::Uri::parse(reference) else {
         eprintln!(
             "Warning: skipping reference `{reference}` (replaced by an always succeeding \
@@ -721,7 +719,7 @@ pub fn resolve_ref(
         refs_usage: &mut RefsUsage,
         usage: RefUsageContext,
     ) -> Option<RichTerm> {
-        let schema_ptr = parse_ref(reference)?;
+        let schema_ptr = resolve_ptr(reference)?;
         refs_usage.record_usage(schema_ptr.clone(), usage);
         Some(schema_ptr.access(usage))
     }

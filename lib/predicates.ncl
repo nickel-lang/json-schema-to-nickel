@@ -274,5 +274,5 @@ let error_lib = import "./error.ncl" in
       else std.contract.check Contract label value
     ),
 
-    always_ctr : Dyn = std.contract.custom (fun label value => 'Ok value)
+    always_ctr : Dyn = std.contract.custom (fun label value => 'Ok value),
 }
