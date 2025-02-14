@@ -207,19 +207,13 @@ let error_lib = import "./error.ncl" in
 
   contract = {
     minItems
-      | Number -> Dyn
-      | doc m%"
-        A contract that checks whether an array has at least a certain number of items.
-      "%
+      : Number -> Dyn
       = fun n =>
-        std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length arr >= n),
+        std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) >= n),
 
     maxItems
-      | Number -> Dyn
-      | doc m%"
-        A contract that checks whether an array has at most a certain number of items.
-      "%
+      : Number -> Dyn
       = fun n =>
-        std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length arr <= n),
+        std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) <= n),
   }
 }
