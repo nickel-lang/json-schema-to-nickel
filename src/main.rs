@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let schema: RootSchema = serde_json::from_reader(f)?;
-    let schema = transform::inline_defs(schema);
+    let schema = transform::merge_defs(schema);
     let schema = transform::lift_any_of_types(schema);
 
     let size = terminal_size()

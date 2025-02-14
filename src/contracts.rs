@@ -30,7 +30,7 @@ use crate::{
 };
 use nickel_lang_core::typ::EnumRowF;
 use schemars::schema::{RootSchema, SubschemaValidation};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use nickel_lang_core::{
     label::Label,
@@ -564,45 +564,6 @@ impl TryAsContract for ArrayValidation {
     }
 }
 
-fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool {
-    let mut seen = HashSet::new();
-    for item in items {
-        if !seen.insert(item) {
-            return false;
-        }
-    }
-    true
-}
-
-fn schema_simple_type(s: &Schema, root_schema: &RootSchema) -> Option<InstanceType> {
-    match s {
-        Schema::Bool(_) => None,
-        Schema::Object(SchemaObject {
-            instance_type: Some(instance_type),
-            ..
-        }) => MaybeNull::from_types(instance_type).inner().copied(),
-        Schema::Object(SchemaObject {
-            metadata: _,
-            instance_type: None,
-            format: None,
-            enum_values: None,
-            const_value: None,
-            subschemas: None,
-            number: None,
-            string: None,
-            array: None,
-            object: None,
-            reference: Some(reference),
-            extensions: _,
-        }) => {
-            let ptr = references::resolve_ptr(reference)?;
-            let s = ptr.resolve(root_schema)?;
-            schema_simple_type(&s, root_schema)
-        }
-        _ => None,
-    }
-}
-
 impl TryAsContract for SubschemaValidation {
     fn try_as_contract(
         &self,
@@ -626,6 +587,10 @@ impl TryAsContract for SubschemaValidation {
                 })
                 .collect::<Option<Vec<_>>>()
                 .map(Contract::from_terms),
+
+            // If the various options in an any_of combinator all have eagerly-distinguishable
+            // types then we can safely turn it into a lazy contract. The same goes for one_of,
+            // because the types are all different and so one_of is effectively any_of.
             SubschemaValidation {
                 all_of: None,
                 any_of: Some(any_of),
@@ -646,7 +611,10 @@ impl TryAsContract for SubschemaValidation {
             } => {
                 let types = any_of
                     .iter()
-                    .map(|s| schema_simple_type(s, root_schema))
+                    .map(|s| {
+                        schema_types(s, root_schema)
+                            .and_then(|tys| MaybeNull::from_types(&tys).inner().copied())
+                    })
                     .collect::<Vec<_>>();
                 if types.iter().all(|opt| opt.is_some()) && distinct(types.into_iter()) {
                     // FIXME: handle the case that any of them is nullable
