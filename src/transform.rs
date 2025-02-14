@@ -136,7 +136,6 @@ struct MergeDefs<'a> {
 
 impl VisitorMut for MergeDefs<'_> {
     fn visit_object(&mut self, obj: &mut SchemaObject) {
-        dbg!(&*obj);
         if let Some(reference) = &obj.reference {
             if let Some(referent) =
                 references::resolve_ptr(reference).and_then(|ptr| ptr.resolve(self.root))
@@ -152,7 +151,6 @@ impl VisitorMut for MergeDefs<'_> {
 
                         let merged_obj = obj.object.clone().shallow_merge(&other.object);
                         let merged_arr = obj.array.clone().shallow_merge(&other.array);
-                        dbg!(can_merge, &merged_obj, &merged_arr);
 
                         if let (Some(merged_obj), Some(merged_arr), true) =
                             (merged_obj, merged_arr, can_merge)
@@ -178,7 +176,6 @@ impl VisitorMut for MergeDefs<'_> {
                 obj.reference.take();
             }
         };
-        dbg!(&*obj);
     }
 }
 
