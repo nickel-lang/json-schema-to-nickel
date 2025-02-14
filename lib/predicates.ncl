@@ -268,11 +268,15 @@ let error_lib = import "./error.ncl" in
         |> error_lib.to_validator_result
       ),
 
-    or_null : Dyn -> Dyn = fun Contract => std.contract.custom (fun label value =>
-      if value == null then
-      'Ok value
-      else std.contract.check Contract label value
-    ),
+  contract = {
+    or_null : Dyn -> Dyn = fun Contract =>
+      std.contract.custom (fun label value =>
+        if value == null then
+          'Ok value
+        else
+          std.contract.check Contract label value
+      ),
 
-    always_ctr : Dyn = std.contract.custom (fun label value => 'Ok value),
+    always : Dyn = std.contract.custom (fun label value => 'Ok value),
+  }
 }

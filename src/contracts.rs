@@ -432,8 +432,8 @@ impl TryAsContract for ArrayValidation {
         if let ArrayValidation {
             items: Some(SingleOrVec::Single(s)),
             additional_items: None,
-            max_items: None,
-            min_items: None,
+            max_items,
+            min_items,
             unique_items: None,
             contains: None,
         } = self
@@ -441,17 +441,39 @@ impl TryAsContract for ArrayValidation {
             let elt = s
                 .try_as_contract(root_schema, refs_usage)
                 .unwrap_or_else(|| s.as_predicate_contract(refs_usage));
-            if !elt.maybe_null {
-                if let [elt] = elt.terms.as_slice() {
-                    Some(Contract::from(TypeF::Array(Box::new(
-                        TypeF::Contract(elt.clone()).into(),
-                    ))))
+            let elt = RichTerm::from(elt);
+
+            let min_ctr = min_items.map(|n| {
+                if n == 1 {
+                    static_access("std", ["array", "NonEmpty"])
                 } else {
-                    None
+                    mk_app!(
+                        static_access(PREDICATES_LIBRARY_ID, ["array", "contract", "minItems"]),
+                        Term::Num(n.into())
+                    )
                 }
-            } else {
-                None
-            }
+            });
+
+            let max_ctr = max_items.map(|n| {
+                mk_app!(
+                    static_access(PREDICATES_LIBRARY_ID, ["array", "contract", "maxItems"]),
+                    Term::Num(n.into())
+                )
+            });
+
+            let terms: Vec<_> = min_ctr
+                .into_iter()
+                .chain(max_ctr)
+                .chain(Some(
+                    Term::Type {
+                        typ: TypeF::Array(Box::new(TypeF::Contract(elt.clone()).into())).into(),
+                        contract: Term::Null.into(),
+                    }
+                    .into(),
+                ))
+                .collect();
+
+            Some(Contract::from_terms(terms))
         } else {
             None
         }
@@ -545,7 +567,7 @@ impl From<RichTerm> for Contract {
 impl From<Contract> for RichTerm {
     fn from(c: Contract) -> Self {
         let ret = match c.terms.as_slice() {
-            [] => static_access(PREDICATES_LIBRARY_ID, ["always_ctr"]),
+            [] => static_access(PREDICATES_LIBRARY_ID, ["contract", "always"]),
             // TODO: shouldn't need to clone here
             [rt] => rt.clone(),
             _ => {
@@ -554,7 +576,10 @@ impl From<Contract> for RichTerm {
             }
         };
         if c.maybe_null {
-            mk_app!(static_access(PREDICATES_LIBRARY_ID, ["or_null"]), ret)
+            mk_app!(
+                static_access(PREDICATES_LIBRARY_ID, ["contract", "or_null"]),
+                ret
+            )
         } else {
             ret
         }
