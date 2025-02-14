@@ -22,6 +22,7 @@
 pub mod contracts;
 pub mod predicates;
 pub mod references;
+pub mod transform;
 pub(crate) mod utils;
 
 use contracts::Contract;

@@ -267,4 +267,16 @@ let error_lib = import "./error.ncl" in
         predicate value
         |> error_lib.to_validator_result
       ),
+
+  contract = {
+    or_null : Dyn -> Dyn = fun Contract =>
+      std.contract.custom (fun label value =>
+        if value == null then
+          'Ok value
+        else
+          std.contract.check Contract label value
+      ),
+
+    always : Dyn = std.contract.custom (fun label value => 'Ok value),
+  }
 }

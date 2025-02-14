@@ -203,5 +203,17 @@ let error_lib = import "./error.ncl" in
           if has_duplicate then
             error_lib.mk_error "duplicate found: %{std.serialize 'Json duplicate}"
           else
-            'Ok
+            'Ok,
+
+  contract = {
+    minItems
+      : Number -> Dyn
+      = fun n =>
+        std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) >= n),
+
+    maxItems
+      : Number -> Dyn
+      = fun n =>
+        std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) <= n),
+  }
 }
