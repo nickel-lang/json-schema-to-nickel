@@ -296,4 +296,50 @@ let error_lib = import "./error.ncl" in
                 }
             )
             'Ok,
+
+  contract = {
+    maxProperties
+      | Number -> Dyn
+      = fun n =>
+        std.contract.from_validator (fun x =>
+          if !std.is_record x then
+            'Error { message = "expected a record" }
+          else if std.record.length x > n then
+            'Error { message = "record contains more than %{std.string.from_number n} fields" }
+          else
+            'Ok
+        ),
+
+    minProperties
+      | Number -> Dyn
+      = fun n =>
+        std.contract.from_validator (fun x =>
+          if !std.is_record x then
+            'Error { message = "expected a record" }
+          else if std.record.length x < n then
+            'Error { message = "record contains less than %{std.string.from_number n} fields" }
+          else
+            'Ok
+        ),
+
+    patternFields | String -> Dyn = fun regex =>
+      let is_match = std.string.is_match regex in
+      std.contract.from_validator (fun x =>
+        if !std.is_record x then
+          'Error { message = "expected a record" }
+        else
+          let bad_field_names =
+            std.record.fields x
+            |> std.array.filter (fun k => !(is_match k))
+            |> std.array.map (fun k => m%""${k}""%)
+          in
+          if std.array.length bad_field_names > 0 then
+            'Error {
+              message = "invalid field names %{std.string.join "," bad_field_names}",
+              notes = ["expected fields to match %{regex}"]
+            }
+          else
+            'Ok
+      ),
+  }
 }
