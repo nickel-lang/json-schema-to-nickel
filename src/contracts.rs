@@ -293,25 +293,6 @@ impl TryAsContract for SchemaObject {
                     reference: None,
                     extensions,
                 },
-                // FIXME: do we need the object type specified? or if properties is the only
-                // thing then it must be an object?
-                // There's an example in github-workflow.json, where "schedule" is an array of things with
-                // properties, like this
-                //
-                // "schedule": {
-                //   "type": "array",
-                //   "items": {
-                //     "properties": {
-                //       "cron": {
-                //         "type": "string",
-                //       }
-                //     },
-                //     "additionalProperties": false
-                //   },
-                // }
-                //
-                // but the "items" doesn't have a "type": "object". What are the json-schema semantics of this?
-                // Is the array allowed to contain numbers?
                 Some(InstanceType::Object),
             ) if only_ignored_fields(extensions) => ov.try_as_contract(root_schema, refs_usage),
             // Enum contract with all strings
@@ -415,6 +396,7 @@ impl TryAsContract for SchemaObject {
                 Some(InstanceType::String),
             ) if only_ignored_fields(extensions) => string.try_as_contract(root_schema, refs_usage),
             _ => {
+                dbg!(self);
                 eprintln!("NO MATCH");
                 None
             }
@@ -464,8 +446,6 @@ impl TryAsContract for ObjectValidation {
                 root_schema,
                 refs_usage,
             ))),
-            // Dicts that have a single regex pattern on their fields and no additional fields
-            // get `{ _: schema}` and  `FieldsMatch regex` contracts.
             (
                 ObjectValidation {
                     max_properties,
@@ -481,29 +461,7 @@ impl TryAsContract for ObjectValidation {
                 // unwrap: we just checked that there's one element
                 let (regex, schema) = pattern_properties.iter().next().unwrap();
                 Some(generate_dict_contract(
-                    Some(regex),
-                    schema,
-                    *min_properties,
-                    *max_properties,
-                    root_schema,
-                    refs_usage,
-                ))
-            }
-            // Dicts that have no restriction on their field names.
-            (
-                ObjectValidation {
-                    max_properties,
-                    min_properties,
-                    required,
-                    properties,
-                    pattern_properties,
-                    additional_properties: _,
-                    property_names: None,
-                },
-                Some(schema),
-            ) if required.is_empty() && properties.is_empty() && pattern_properties.is_empty() => {
-                Some(generate_dict_contract(
-                    None,
+                    regex,
                     schema,
                     *min_properties,
                     *max_properties,
@@ -517,7 +475,7 @@ impl TryAsContract for ObjectValidation {
 }
 
 fn generate_dict_contract(
-    regex: Option<&str>,
+    regex: &str,
     schema: &Schema,
     min_properties: Option<u32>,
     max_properties: Option<u32>,
@@ -537,15 +495,13 @@ fn generate_dict_contract(
         contract: Term::Null.into(),
     };
 
-    let patterns = regex.map(|regex| {
-        mk_app!(
-            static_access(
-                PREDICATES_LIBRARY_ID,
-                ["records", "contract", "patternFields"]
-            ),
-            Term::Str(regex.to_owned().into())
-        )
-    });
+    let patterns = mk_app!(
+        static_access(
+            PREDICATES_LIBRARY_ID,
+            ["records", "contract", "patternFields"]
+        ),
+        Term::Str(regex.to_owned().into())
+    );
 
     let min_contract = min_properties.map(|n| {
         mk_app!(
@@ -568,7 +524,7 @@ fn generate_dict_contract(
 
     Contract::from_terms(
         std::iter::once(dict_schema.into())
-            .chain(patterns)
+            .chain(Some(patterns))
             .chain(min_contract)
             .chain(max_contract)
             .collect(),

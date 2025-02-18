@@ -1547,6 +1547,7 @@
             "workflow_call": {
               "$comment": "https://docs.github.com/en/actions/learn-github-actions/events-that-trigger-workflows#workflow_call",
               "description": "Allows workflows to be reused by other workflows.",
+              "type": ["object", "null"],
               "properties": {
                 "inputs": {
                   "$comment": "https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#onworkflow_callinputs",
@@ -1593,10 +1594,12 @@
                 "secrets": {
                   "$comment": "https://docs.github.com/en/actions/learn-github-actions/workflow-syntax-for-github-actions#onworkflow_callsecrets",
                   "description": "A map of the secrets that can be used in the called workflow. Within the called workflow, you can use the secrets context to refer to a secret.",
+                  "type": "object",
                   "patternProperties": {
                     "^[_a-zA-Z][a-zA-Z0-9_-]*$": {
                       "$comment": "https://docs.github.com/en/actions/learn-github-actions/workflow-syntax-for-github-actions#onworkflow_callsecretssecret_id",
                       "description": "A string identifier to associate with the secret.",
+                      "type": "object",
                       "properties": {
                         "description": {
                           "description": "A string description of the secret parameter.",
@@ -1619,6 +1622,7 @@
             "workflow_dispatch": {
               "$comment": "https://github.blog/changelog/2020-07-06-github-actions-manual-triggers-with-workflow_dispatch/",
               "description": "You can now create workflows that are manually triggered with the new workflow_dispatch event. You will then see a 'Run workflow' button on the Actions tab, enabling you to easily trigger a run.",
+              "type": ["object", "null"],
               "properties": {
                 "inputs": {
                   "$comment": "https://help.github.com/en/github/automating-your-workflow-with-github-actions/metadata-syntax-for-github-actions#inputs",
@@ -1765,6 +1769,7 @@
               "$comment": "https://docs.github.com/en/actions/reference/events-that-trigger-workflows#workflow_run",
               "$ref": "#/definitions/eventObject",
               "description": "This event occurs when a workflow run is requested or completed, and allows you to execute a workflow based on the finished result of another workflow. For example, if your pull_request workflow generates build artifacts, you can create a new workflow that uses workflow_run to analyze the results and add a comment to the original pull request.",
+              "type": ["object", "null"],
               "properties": {
                 "types": {
                   "$ref": "#/definitions/types",
