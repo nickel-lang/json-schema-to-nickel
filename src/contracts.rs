@@ -29,7 +29,7 @@ use crate::{
     utils::{distinct, schema_types},
 };
 use nickel_lang_core::typ::EnumRowF;
-use schemars::schema::{RootSchema, SubschemaValidation};
+use schemars::schema::{RootSchema, StringValidation, SubschemaValidation};
 use std::collections::{BTreeMap, BTreeSet};
 
 use nickel_lang_core::{
@@ -204,181 +204,221 @@ impl TryAsContract for SchemaObject {
         let instance_type = self.instance_type.as_ref().map(SimpleType::from_types);
         let simple_type = instance_type.as_ref().and_then(SimpleType::inner);
 
-        let ctr =
-            match (self, simple_type) {
-                // a raw type
-                (
-                    SchemaObject {
-                        metadata: _,
-                        instance_type: _,
-                        format: _,
-                        enum_values: None,
-                        const_value: None,
-                        subschemas: None,
-                        number: None,
-                        string: None,
-                        array: None,
-                        object: None,
-                        reference: None,
-                        extensions,
-                    },
-                    Some(instance_type),
-                ) if only_ignored_fields(extensions) => {
-                    // We ultimately produce a Flat type based on a contract with
-                    // only a type in it. Semantically, this is kind of weird. But
-                    // the pretty printer doesn't care, and it simplifies our code
-                    // significantly.
-                    Some(Contract::from(instance_type))
-                }
-                // a reference to a definition
-                (
-                    SchemaObject {
-                        metadata: _,
-                        instance_type: None,
-                        format: None,
-                        enum_values: None,
-                        const_value: None,
-                        subschemas: None,
-                        number: None,
-                        string: None,
-                        array: None,
-                        object: None,
-                        reference: Some(reference),
-                        extensions,
-                    },
-                    _,
-                ) if only_ignored_fields(extensions) => Some(Contract::from(
-                    references::resolve_ref(reference, refs_usage, RefUsageContext::Contract),
-                )),
-                // a freeform record
-                (
-                    SchemaObject {
-                        metadata: _,
-                        instance_type: _,
-                        format: None,
-                        enum_values: None,
-                        const_value: None,
-                        subschemas: None,
-                        number: None,
-                        string: None,
-                        array: None,
-                        object: None,
-                        reference: None,
-                        extensions,
-                    },
-                    Some(InstanceType::Object),
-                ) if only_ignored_fields(extensions) => {
-                    Some(Contract::from(Term::Record(RecordData {
-                        attrs: RecordAttrs {
-                            open: true,
-                            ..Default::default()
-                        },
+        let ctr = match (self, simple_type) {
+            // a raw type
+            (
+                SchemaObject {
+                    metadata: _,
+                    instance_type: _,
+                    format: _,
+                    enum_values: None,
+                    const_value: None,
+                    subschemas: None,
+                    number: None,
+                    string: None,
+                    array: None,
+                    object: None,
+                    reference: None,
+                    extensions,
+                },
+                Some(instance_type),
+            ) if only_ignored_fields(extensions) => {
+                // We ultimately produce a Flat type based on a contract with
+                // only a type in it. Semantically, this is kind of weird. But
+                // the pretty printer doesn't care, and it simplifies our code
+                // significantly.
+                Some(Contract::from(instance_type))
+            }
+            // a reference to a definition
+            (
+                SchemaObject {
+                    metadata: _,
+                    instance_type: None,
+                    format: None,
+                    enum_values: None,
+                    const_value: None,
+                    subschemas: None,
+                    number: None,
+                    string: None,
+                    array: None,
+                    object: None,
+                    reference: Some(reference),
+                    extensions,
+                },
+                _,
+            ) if only_ignored_fields(extensions) => Some(Contract::from(references::resolve_ref(
+                reference,
+                refs_usage,
+                RefUsageContext::Contract,
+            ))),
+            // a freeform record
+            (
+                SchemaObject {
+                    metadata: _,
+                    instance_type: _,
+                    format: None,
+                    enum_values: None,
+                    const_value: None,
+                    subschemas: None,
+                    number: None,
+                    string: None,
+                    array: None,
+                    object: None,
+                    reference: None,
+                    extensions,
+                },
+                Some(InstanceType::Object),
+            ) if only_ignored_fields(extensions) => {
+                Some(Contract::from(Term::Record(RecordData {
+                    attrs: RecordAttrs {
+                        open: true,
                         ..Default::default()
-                    })))
-                }
-                // a record with sub-field types specified
-                (
-                    SchemaObject {
-                        metadata: _,
-                        instance_type: _,
-                        format: None,
-                        enum_values: None,
-                        const_value: None,
-                        subschemas: None,
-                        number: None,
-                        string: None,
-                        array: None,
-                        object: Some(ov),
-                        reference: None,
-                        extensions,
                     },
-                    Some(InstanceType::Object),
-                ) if only_ignored_fields(extensions) => ov.try_as_contract(root_schema, refs_usage),
-                // Enum contract with all strings
-                // => | std.enum.TagOrString | [| 'foo, 'bar, 'baz |]
-                (
-                    SchemaObject {
-                        metadata: _,
-                        instance_type: _,
-                        format: None,
-                        enum_values: Some(values),
-                        const_value: None,
-                        subschemas: None,
-                        number: None,
-                        string: None,
-                        array: None,
-                        object: None,
-                        reference: None,
-                        extensions: _,
-                    },
-                    Some(InstanceType::String),
-                ) => {
-                    let enum_rows: EnumRows =
-                        values
-                            .iter()
-                            .try_fold(EnumRows(EnumRowsF::Empty), |acc, value| {
-                                let Value::String(id) = value else {
-                                    return None;
-                                };
+                    ..Default::default()
+                })))
+            }
+            // a record with sub-field types specified
+            (
+                SchemaObject {
+                    metadata: _,
+                    instance_type: _,
+                    format: None,
+                    enum_values: None,
+                    const_value: None,
+                    subschemas: None,
+                    number: None,
+                    string: None,
+                    array: None,
+                    object: Some(ov),
+                    reference: None,
+                    extensions,
+                },
+                // FIXME: do we need the object type specified? or if properties is the only
+                // thing then it must be an object?
+                // There's an example in github-workflow.json, where "schedule" is an array of things with
+                // properties, like this
+                //
+                // "schedule": {
+                //   "type": "array",
+                //   "items": {
+                //     "properties": {
+                //       "cron": {
+                //         "type": "string",
+                //       }
+                //     },
+                //     "additionalProperties": false
+                //   },
+                // }
+                //
+                // but the "items" doesn't have a "type": "object". What are the json-schema semantics of this?
+                // Is the array allowed to contain numbers?
+                Some(InstanceType::Object),
+            ) if only_ignored_fields(extensions) => ov.try_as_contract(root_schema, refs_usage),
+            // Enum contract with all strings
+            // => | std.enum.TagOrString | [| 'foo, 'bar, 'baz |]
+            (
+                SchemaObject {
+                    metadata: _,
+                    instance_type: _,
+                    format: None,
+                    enum_values: Some(values),
+                    const_value: None,
+                    subschemas: None,
+                    number: None,
+                    string: None,
+                    array: None,
+                    object: None,
+                    reference: None,
+                    extensions: _,
+                },
+                Some(InstanceType::String),
+            ) => {
+                let enum_rows: EnumRows =
+                    values
+                        .iter()
+                        .try_fold(EnumRows(EnumRowsF::Empty), |acc, value| {
+                            let Value::String(id) = value else {
+                                return None;
+                            };
 
-                                let row = EnumRowF {
-                                    id: id.into(),
-                                    typ: None,
-                                };
+                            let row = EnumRowF {
+                                id: id.into(),
+                                typ: None,
+                            };
 
-                                Some(EnumRows(EnumRowsF::Extend {
-                                    row,
-                                    tail: Box::new(acc),
-                                }))
-                            })?;
-                    Some(Contract::from_terms(vec![
-                        static_access("std", ["enum", "TagOrString"]),
-                        Term::Type {
-                            typ: TypeF::Enum(enum_rows).into(),
-                            // We don't care about the contract here, it's a run-time cache thing.
-                            contract: Term::Null.into(),
-                        }
-                        .into(),
-                    ]))
-                }
-                (
-                    SchemaObject {
-                        metadata: _,
-                        instance_type: _,
-                        format: None,
-                        enum_values: None,
-                        const_value: None,
-                        subschemas: None,
-                        number: None,
-                        string: None,
-                        array: Some(av),
-                        object: None,
-                        reference: None,
-                        extensions: _,
-                    },
-                    Some(InstanceType::Array),
-                ) => av.try_as_contract(root_schema, refs_usage),
-                (
-                    SchemaObject {
-                        metadata: _,
-                        instance_type: None,
-                        format: None,
-                        enum_values: None,
-                        const_value: None,
-                        subschemas: Some(subschemas),
-                        number: None,
-                        string: None,
-                        array: None,
-                        object: None,
-                        reference: None,
-                        extensions,
-                    },
-                    None,
-                ) if only_ignored_fields(extensions) => {
-                    subschemas.try_as_contract(root_schema, refs_usage)
-                }
-                _ => None,
-            };
+                            Some(EnumRows(EnumRowsF::Extend {
+                                row,
+                                tail: Box::new(acc),
+                            }))
+                        })?;
+                Some(Contract::from_terms(vec![
+                    static_access("std", ["enum", "TagOrString"]),
+                    Term::Type {
+                        typ: TypeF::Enum(enum_rows).into(),
+                        // We don't care about the contract here, it's a run-time cache thing.
+                        contract: Term::Null.into(),
+                    }
+                    .into(),
+                ]))
+            }
+            (
+                SchemaObject {
+                    metadata: _,
+                    instance_type: _,
+                    format: None,
+                    enum_values: None,
+                    const_value: None,
+                    subschemas: None,
+                    number: None,
+                    string: None,
+                    array: Some(av),
+                    object: None,
+                    reference: None,
+                    extensions: _,
+                },
+                Some(InstanceType::Array),
+            ) => av.try_as_contract(root_schema, refs_usage),
+            (
+                SchemaObject {
+                    metadata: _,
+                    instance_type: None,
+                    format: None,
+                    enum_values: None,
+                    const_value: None,
+                    subschemas: Some(subschemas),
+                    number: None,
+                    string: None,
+                    array: None,
+                    object: None,
+                    reference: None,
+                    extensions,
+                },
+                None,
+            ) if only_ignored_fields(extensions) => {
+                subschemas.try_as_contract(root_schema, refs_usage)
+            }
+            (
+                SchemaObject {
+                    metadata: _,
+                    instance_type: _,
+                    format: None,
+                    enum_values: None,
+                    const_value: None,
+                    subschemas: None,
+                    number: None,
+                    string: Some(string),
+                    array: None,
+                    object: None,
+                    reference: None,
+                    extensions,
+                },
+                Some(InstanceType::String),
+            ) if only_ignored_fields(extensions) => string.try_as_contract(root_schema, refs_usage),
+            _ => {
+                eprintln!("NO MATCH");
+                None
+            }
+        };
 
         match instance_type {
             Some(SimpleType::Nullable(_)) => Some(ctr?.or_null()),
@@ -560,6 +600,41 @@ impl TryAsContract for SubschemaValidation {
             }
             _ => None,
         }
+    }
+}
+
+impl TryAsContract for StringValidation {
+    fn try_as_contract(
+        &self,
+        _root_schema: &RootSchema,
+        _refs_usage: &mut RefsUsage,
+    ) -> Option<Contract> {
+        let pattern = self.pattern.as_ref().map(|s| {
+            mk_app!(
+                static_access(PREDICATES_LIBRARY_ID, ["strings", "contract", "Pattern"]),
+                Term::Str(s.to_owned().into())
+            )
+        });
+        let min_length = self.min_length.map(|len| {
+            mk_app!(
+                static_access(PREDICATES_LIBRARY_ID, ["strings", "contract", "MinLength"]),
+                Term::Num(len.into())
+            )
+        });
+        let max_length = self.min_length.map(|len| {
+            mk_app!(
+                static_access(PREDICATES_LIBRARY_ID, ["strings", "contract", "MaxLength"]),
+                Term::Num(len.into())
+            )
+        });
+
+        Some(Contract::from_terms(
+            pattern
+                .into_iter()
+                .chain(min_length)
+                .chain(max_length)
+                .collect(),
+        ))
     }
 }
 
