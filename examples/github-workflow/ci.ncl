@@ -15,7 +15,7 @@
         branches = ["main"]
       },
       pull_request = {
-        branches = ["main"]
+        branch = ["main"]
       }
     },
 

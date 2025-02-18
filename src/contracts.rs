@@ -60,31 +60,37 @@ fn only_ignored_fields<V>(extensions: &BTreeMap<String, V>) -> bool {
         .any(|x| !IGNORED_FIELDS.contains(&x.as_ref()))
 }
 
+/// Sometimes we can simplify schemas if they have a simple known type.
+///
+/// This enum captures the cases that we handle.
 #[derive(Debug, Copy, Clone)]
-enum MaybeNull {
-    NullOr(InstanceType),
+enum SimpleType {
+    /// A single type, like "object" or "array".
     Just(InstanceType),
+    /// A single type, but it could also be null.
+    Nullable(InstanceType),
+    /// A more complicated type that we don't have special handling for.
     Complicated,
 }
 
-impl MaybeNull {
-    fn from_types(types: &SingleOrVec<InstanceType>) -> MaybeNull {
+impl SimpleType {
+    fn from_types(types: &SingleOrVec<InstanceType>) -> SimpleType {
         match types {
-            SingleOrVec::Single(s) => MaybeNull::Just(**s),
+            SingleOrVec::Single(s) => SimpleType::Just(**s),
             SingleOrVec::Vec(vec) => match vec.as_slice() {
-                [s] => MaybeNull::Just(*s),
-                [s, InstanceType::Null] | [InstanceType::Null, s] => MaybeNull::NullOr(*s),
-                _ => MaybeNull::Complicated,
+                [s] => SimpleType::Just(*s),
+                [s, InstanceType::Null] | [InstanceType::Null, s] => SimpleType::Nullable(*s),
+                _ => SimpleType::Complicated,
             },
         }
     }
 
     fn inner(&self) -> Option<&InstanceType> {
         match self {
-            MaybeNull::NullOr(instance_type) | MaybeNull::Just(instance_type) => {
+            SimpleType::Nullable(instance_type) | SimpleType::Just(instance_type) => {
                 Some(instance_type)
             }
-            MaybeNull::Complicated => None,
+            SimpleType::Complicated => None,
         }
     }
 }
@@ -195,8 +201,8 @@ impl TryAsContract for SchemaObject {
         root_schema: &RootSchema,
         refs_usage: &mut RefsUsage,
     ) -> Option<Contract> {
-        let instance_type = self.instance_type.as_ref().map(MaybeNull::from_types);
-        let simple_type = instance_type.as_ref().and_then(MaybeNull::inner);
+        let instance_type = self.instance_type.as_ref().map(SimpleType::from_types);
+        let simple_type = instance_type.as_ref().and_then(SimpleType::inner);
 
         let ctr =
             match (self, simple_type) {
@@ -375,7 +381,7 @@ impl TryAsContract for SchemaObject {
             };
 
         match instance_type {
-            Some(MaybeNull::NullOr(_)) => Some(ctr?.or_null()),
+            Some(SimpleType::Nullable(_)) => Some(ctr?.or_null()),
             _ => ctr,
         }
     }
@@ -529,19 +535,25 @@ impl TryAsContract for SubschemaValidation {
                     .iter()
                     .map(|s| {
                         schema_types(s, root_schema)
-                            .and_then(|tys| MaybeNull::from_types(&tys).inner().copied())
+                            .and_then(|tys| SimpleType::from_types(&tys).inner().copied())
                     })
                     .collect::<Vec<_>>();
+
+                // As long as all of the types are simple and distinct, we can
+                // make a lazy union contract. There's one corner case where
+                // this is technically not correct: if it's a `oneOf` and more
+                // than one of the types is nullable then we should actually
+                // forbid null. This case is most likely a bug in the contract,
+                // though; probably they meant `anyOf`.
                 if types.iter().all(|opt| opt.is_some()) && distinct(types.into_iter()) {
-                    // FIXME: handle the case that any of them is nullable
                     let ctrs = any_of.iter().map(|x| {
                         x.try_as_contract(root_schema, refs_usage)
                             .unwrap_or_else(|| x.as_predicate_contract(refs_usage))
                     });
 
                     let arr = Term::Array(ctrs.map(RichTerm::from).collect(), Default::default());
-                    let any_of = mk_app!(static_access("std", ["contract", "any_of"]), arr);
-                    Some(Contract::from_terms(vec![any_of]))
+                    let any = mk_app!(static_access("std", ["contract", "any_of"]), arr);
+                    Some(Contract::from_terms(vec![any]))
                 } else {
                     None
                 }
