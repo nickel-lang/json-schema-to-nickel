@@ -269,14 +269,24 @@ let error_lib = import "./error.ncl" in
       ),
 
   contract = {
-    or_null : Dyn -> Dyn = fun Contract =>
-      std.contract.custom (fun label value =>
-        if value == null then
-          'Ok value
-        else
-          std.contract.check Contract label value
-      ),
+    or_null
+      : Dyn -> Dyn
+      | doc m%"
+        For a contract `C`, `or_null C` returns a contract that allows either `C` or a null value.
+      "%
+      = fun Contract =>
+        std.contract.custom (fun label value =>
+          if value == null then
+            'Ok value
+          else
+            std.contract.check Contract label value
+        ),
 
-    always : Dyn = std.contract.custom (fun label value => 'Ok value),
+    always
+      : Dyn
+      | doc m%"
+        A contract that always succeeds. The same as `Dyn`, but maybe with a clearer name.
+      "%
+      = std.contract.custom (fun label value => 'Ok value),
   }
 }

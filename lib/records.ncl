@@ -300,6 +300,9 @@ let error_lib = import "./error.ncl" in
   contract = {
     maxProperties
       | Number -> Dyn
+      | doc m%"
+        A contract asserting that the value is a record with at most a specific number of properties.
+      "%
       = fun n =>
         std.contract.from_validator (fun x =>
           if !std.is_record x then
@@ -312,6 +315,9 @@ let error_lib = import "./error.ncl" in
 
     minProperties
       | Number -> Dyn
+      | doc m%"
+        A contract asserting that the value is a record with at least a specific number of properties.
+      "%
       = fun n =>
         std.contract.from_validator (fun x =>
           if !std.is_record x then
@@ -322,6 +328,7 @@ let error_lib = import "./error.ncl" in
             'Ok
         ),
 
+    # TODO: replace with FieldsMatch once that's in a nickel release
     patternFields | String -> Dyn = fun regex =>
       let is_match = std.string.is_match regex in
       std.contract.from_validator (fun x =>
