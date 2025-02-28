@@ -20,6 +20,7 @@
 //! generates a predicate. In either case, the result is wrapped with the
 //! necessary bindings to the predicate support library and returned.
 pub mod contracts;
+pub mod intermediate;
 pub mod predicates;
 pub mod references;
 pub mod transform;

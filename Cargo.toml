@@ -12,6 +12,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 clap = { version = "^4.3", features = ["derive"] }
 fluent-uri = "0.1.4"
+miette = "7.5.0"
 nickel-lang-core = { version = "0.10", default-features = false }
 
 pretty = "^0.11"
