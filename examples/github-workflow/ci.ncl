@@ -44,5 +44,5 @@
   |> std.serialize 'Json
   |> std.deserialize 'Json
 )
-  | (import "github-workflow.schema.ncl")
+  | (import "../../out.ncl")
 

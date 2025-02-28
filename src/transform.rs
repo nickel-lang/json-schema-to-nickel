@@ -1,3 +1,9 @@
+//! This module implements some transforms of the JSON schema that preserve semantics
+//! but make the schema easier to analyze.
+//!
+//! It turns out that `schemars`'s representation of schemas is pretty clunky for this
+//! purpose. Probably we want a better intermediate representation.
+
 use schemars::schema::{
     ArrayValidation, ObjectValidation, RootSchema, Schema, SchemaObject, SingleOrVec,
     SubschemaValidation,
@@ -5,34 +11,34 @@ use schemars::schema::{
 
 use crate::{references, utils::plain_schema_types};
 
-// Some JSON schemas factor out common parts of schemas into definitions.
-// This causes some difficulty for our analysis because information is represented
-// in multiple different places, so this transformation tries to merge factored-out
-// parts into a single schema.
-//
-// As a motivating example, the github-workflow schema factors out
-//
-// ```json
-//    "eventObject": {
-//      "oneOf": [
-//        {
-//          "type": "object"
-//        },
-//        {
-//          "type": "null"
-//        }
-//      ],
-//      "additionalProperties": true
-//    },
-// ```
-//
-// as a definition, and then references it in various places that might instead
-// contain
-//
-// ```json
-// "type": ["object", "null"],
-// "additionalProperties": true
-// ```
+/// Some JSON schemas factor out common parts of schemas into definitions.
+/// This causes some difficulty for our analysis because information is represented
+/// in multiple different places, so this transformation tries to merge factored-out
+/// parts into a single schema.
+///
+/// As a motivating example, the github-workflow schema factors out
+///
+/// ```json
+///    "eventObject": {
+///      "oneOf": [
+///        {
+///          "type": "object"
+///        },
+///        {
+///          "type": "null"
+///        }
+///      ],
+///      "additionalProperties": true
+///    },
+/// ```
+///
+/// as a definition, and then references it in various places that might instead
+/// contain
+///
+/// ```json
+/// "type": ["object", "null"],
+/// "additionalProperties": true
+/// ```
 pub fn merge_defs(root_schema: RootSchema) -> RootSchema {
     let mut schema = root_schema.schema.clone();
     schema.post_visit(&mut MergeDefs { root: &root_schema });
@@ -43,7 +49,34 @@ pub fn merge_defs(root_schema: RootSchema) -> RootSchema {
     }
 }
 
-// TODO: docme
+/// The definition-merging of `merge_defs` is fine, but let's suppose we have
+///
+/// ```json
+/// "branch_protection_rule": {
+///   "$ref": "#/definitions/eventObject",
+///   "properties": { ... }
+/// }
+/// ```
+///
+/// which then gets merged with the defs to become
+///
+/// ```json
+/// "branch_protection_rule": {
+///   "oneOf": [
+///     {
+///       "type": "object"
+///     },
+///     {
+///       "type": "null"
+///     }
+///   ],
+///   "additionalProperties": true
+///   "properties": { ... }
+/// }
+/// ```
+///
+/// This still isn't great, because instead of "oneOf" with types inside, we'd prefer
+/// just to have "type" at the top-level. That's what this transformation does.
 pub fn lift_any_of_types(root_schema: RootSchema) -> RootSchema {
     let mut schema = root_schema.schema.clone();
     schema.post_visit(&mut UnionType { root: &root_schema });
