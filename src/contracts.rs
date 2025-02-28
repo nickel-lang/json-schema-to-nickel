@@ -446,6 +446,7 @@ impl TryAsContract for ObjectValidation {
                 root_schema,
                 refs_usage,
             ))),
+            // Dicts that have a regex pattern on their fields.
             (
                 ObjectValidation {
                     max_properties,
@@ -461,7 +462,29 @@ impl TryAsContract for ObjectValidation {
                 // unwrap: we just checked that there's one element
                 let (regex, schema) = pattern_properties.iter().next().unwrap();
                 Some(generate_dict_contract(
-                    regex,
+                    Some(regex),
+                    schema,
+                    *min_properties,
+                    *max_properties,
+                    root_schema,
+                    refs_usage,
+                ))
+            }
+            // Dicts that have no restriction on their field names.
+            (
+                ObjectValidation {
+                    max_properties,
+                    min_properties,
+                    required,
+                    properties,
+                    pattern_properties,
+                    additional_properties: _,
+                    property_names: None,
+                },
+                Some(schema),
+            ) if required.is_empty() && properties.is_empty() && pattern_properties.is_empty() => {
+                Some(generate_dict_contract(
+                    None,
                     schema,
                     *min_properties,
                     *max_properties,
@@ -475,7 +498,7 @@ impl TryAsContract for ObjectValidation {
 }
 
 fn generate_dict_contract(
-    regex: &str,
+    regex: Option<&str>,
     schema: &Schema,
     min_properties: Option<u32>,
     max_properties: Option<u32>,
@@ -495,13 +518,15 @@ fn generate_dict_contract(
         contract: Term::Null.into(),
     };
 
-    let patterns = mk_app!(
-        static_access(
-            PREDICATES_LIBRARY_ID,
-            ["records", "contract", "patternFields"]
-        ),
-        Term::Str(regex.to_owned().into())
-    );
+    let patterns = regex.map(|regex| {
+        mk_app!(
+            static_access(
+                PREDICATES_LIBRARY_ID,
+                ["records", "contract", "patternFields"]
+            ),
+            Term::Str(regex.to_owned().into())
+        )
+    });
 
     let min_contract = min_properties.map(|n| {
         mk_app!(
@@ -524,7 +549,7 @@ fn generate_dict_contract(
 
     Contract::from_terms(
         std::iter::once(dict_schema.into())
-            .chain(Some(patterns))
+            .chain(patterns)
             .chain(min_contract)
             .chain(max_contract)
             .collect(),
