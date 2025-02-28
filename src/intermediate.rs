@@ -1,10 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
+    convert::Infallible,
     str::FromStr,
 };
 
 use miette::miette;
 use serde_json::{Map, Value};
+
+use crate::references::{SchemaPointer, SchemaPointerElt};
 
 // See https://github.com/orgs/json-schema-org/discussions/526#discussioncomment-7559030
 // regarding the semantics of $ref in an object with other fields. Basically, we should interpret
@@ -22,12 +25,6 @@ use serde_json::{Map, Value};
 //     { "properties": ... }
 //   ]
 // }
-
-pub struct RootSchema {
-    // FIXME: we need a better representation here
-    pub definitions: HashMap<String, Schema>,
-    pub schema: Schema,
-}
 
 #[derive(Clone, Debug)]
 pub enum Schema {
@@ -139,34 +136,6 @@ impl FromStr for InstanceType {
             s => miette::bail!("unknown instance type `{s}`"),
         };
         Ok(ty)
-    }
-}
-
-impl<'a> TryFrom<&'a serde_json::Value> for RootSchema {
-    type Error = miette::Report;
-
-    fn try_from(value: &'a serde_json::Value) -> Result<Self, Self::Error> {
-        let obj = value
-            .as_object()
-            .ok_or_else(|| miette!("root schema must be an object"))?;
-
-        let definitions = if let Some(refs) = obj.get("references") {
-            let refs_obj = refs
-                .as_object()
-                .ok_or_else(|| miette!("\"references\" must be an object"))?;
-
-            refs_obj
-                .iter()
-                .map(|(key, val)| Ok((key.clone(), Schema::try_from(val)?)))
-                .collect::<Result<HashMap<_, _>, Self::Error>>()?
-        } else {
-            Default::default()
-        };
-
-        Ok(Self {
-            definitions,
-            schema: Schema::try_from(value)?,
-        })
     }
 }
 
@@ -596,14 +565,276 @@ fn extract_array_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>
     Ok(ret)
 }
 
+#[derive(Copy, Clone, PartialEq)]
+enum TraverseOrder {
+    TopDown,
+    BottomUp,
+}
+
+trait Traverse<T>: Sized {
+    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    where
+        F: FnMut(T) -> Result<T, E>;
+}
+
+impl Traverse<Schema> for Schema {
+    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    where
+        F: FnMut(Schema) -> Result<Schema, E>,
+    {
+        let val = match order {
+            TraverseOrder::TopDown => f(self)?,
+            TraverseOrder::BottomUp => self,
+        };
+
+        let val = match val {
+            Schema::Always
+            | Schema::Never
+            | Schema::Null
+            | Schema::Boolean
+            | Schema::Const(_)
+            | Schema::Enum(_)
+            | Schema::Number(_)
+            | Schema::String(_)
+            | Schema::Ref(_) => val,
+            Schema::Object(obj) => Schema::Object(obj.traverse(f, order)?),
+            Schema::Array(arr) => Schema::Array(arr.traverse(f, order)?),
+            Schema::AnyOf(vec) => Schema::AnyOf(vec.traverse(f, order)?),
+            Schema::OneOf(vec) => Schema::OneOf(vec.traverse(f, order)?),
+            Schema::AllOf(vec) => Schema::AllOf(vec.traverse(f, order)?),
+            Schema::Ite { iph, then, els } => Schema::Ite {
+                iph: iph.traverse(f, order)?,
+                then: then.traverse(f, order)?,
+                els: els.traverse(f, order)?,
+            },
+            Schema::Not(schema) => Schema::Not(schema.traverse(f, order)?),
+        };
+
+        match order {
+            TraverseOrder::TopDown => Ok(val),
+            TraverseOrder::BottomUp => f(val),
+        }
+    }
+}
+
+impl<S, T: Traverse<S>> Traverse<S> for Box<T> {
+    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    where
+        F: FnMut(S) -> Result<S, E>,
+    {
+        (*self).traverse(f, order).map(Box::new)
+    }
+}
+
+impl<S, T: Traverse<S>> Traverse<S> for Option<T> {
+    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    where
+        F: FnMut(S) -> Result<S, E>,
+    {
+        self.map(|v| v.traverse(f, order)).transpose()
+    }
+}
+
+impl<S, T: Traverse<S>> Traverse<S> for Vec<T> {
+    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    where
+        F: FnMut(S) -> Result<S, E>,
+    {
+        self.into_iter().map(|x| x.traverse(f, order)).collect()
+    }
+}
+
+impl<K: std::hash::Hash + Eq + std::fmt::Debug, S, T: Traverse<S>> Traverse<S> for HashMap<K, T> {
+    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    where
+        F: FnMut(S) -> Result<S, E>,
+    {
+        self.into_iter()
+            .map(|(k, v)| Ok((dbg!(k), v.traverse(f, order)?)))
+            .collect()
+    }
+}
+
+impl Traverse<Schema> for Obj {
+    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    where
+        F: FnMut(Schema) -> Result<Schema, E>,
+    {
+        let val = match self {
+            Obj::Any | Obj::MaxProperties(_) | Obj::MinProperties(_) | Obj::Required(_) => self,
+            Obj::PropertyNames(schema) => Obj::PropertyNames(schema.traverse(f, order)?),
+            Obj::Dependencies(hash_map) => Obj::Dependencies(hash_map.traverse(f, order)?),
+            Obj::Properties(props) => Obj::Properties(ObjectProperties {
+                properties: props.properties.traverse(f, order)?,
+                pattern_properties: props.pattern_properties.traverse(f, order)?,
+                additional_properties: props.additional_properties.traverse(f, order)?,
+            }),
+        };
+        Ok(val)
+    }
+}
+
+impl Traverse<Schema> for Dependency {
+    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    where
+        F: FnMut(Schema) -> Result<Schema, E>,
+    {
+        let val = match self {
+            Dependency::Array(_) => self,
+            Dependency::Schema(schema) => Dependency::Schema(schema.traverse(f, order)?),
+        };
+        Ok(val)
+    }
+}
+
+impl Traverse<Schema> for Arr {
+    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    where
+        F: FnMut(Schema) -> Result<Schema, E>,
+    {
+        let val = match self {
+            Arr::Any | Arr::MaxItems(_) | Arr::MinItems(_) | Arr::UniqueItems => self,
+            Arr::AllItems(schema) => Arr::AllItems(schema.traverse(f, order)?),
+            Arr::PerItem { initial, rest } => Arr::PerItem {
+                initial: initial.traverse(f, order)?,
+                rest: rest.traverse(f, order)?,
+            },
+            Arr::Contains(schema) => Arr::Contains(schema.traverse(f, order)?),
+        };
+        Ok(val)
+    }
+}
+
+pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, HashMap<String, Schema>) {
+    let mut refs = HashMap::new();
+    let mut record_ref = |schema: Schema| -> Result<Schema, Infallible> {
+        if let Schema::Ref(s) = schema {
+            let Some(stripped) = s.strip_prefix("#/") else {
+                eprintln!("skipping unsupported pointer \"{s}\"");
+                return Ok(Schema::Ref(s));
+            };
+            if !refs.contains_key(&s) {
+                match SchemaPointer::parse(stripped) {
+                    Err(e) => {
+                        eprintln!("skipping unparseable pointer \"{s}\": {e}");
+                    }
+                    Ok(ptr) => match resolve_ptr(&ptr, value) {
+                        Ok(val) => match Schema::try_from(val) {
+                            Ok(v) => {
+                                refs.insert(s.clone(), v);
+                            }
+                            Err(e) => {
+                                eprintln!("skipping pointer \"{s}\" because we failed to convert the pointee: {e}");
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("skipping pointer \"{s}\" because it failed to resolve: {e}");
+                        }
+                    },
+                }
+            }
+            Ok(Schema::Ref(s))
+        } else {
+            Ok(schema)
+        }
+    };
+
+    let schema = schema
+        .traverse(&mut record_ref, TraverseOrder::BottomUp)
+        .unwrap();
+    (schema, refs)
+}
+
+impl SchemaPointerElt {
+    fn name(&self) -> &str {
+        match self {
+            SchemaPointerElt::Definitions(_) => "definitions",
+            SchemaPointerElt::Properties(_) => "properties",
+            SchemaPointerElt::AdditionalProperties => "additionalProperties",
+            SchemaPointerElt::ItemsIndexed(_) => "items",
+            SchemaPointerElt::ItemsSingle => "items",
+            SchemaPointerElt::Contains => "contains",
+            SchemaPointerElt::AllOf(_) => "allOf",
+            SchemaPointerElt::AnyOf(_) => "anyOf",
+            SchemaPointerElt::OneOf(_) => "oneOf",
+            SchemaPointerElt::Not => "not",
+            SchemaPointerElt::Then => "then",
+            SchemaPointerElt::Else => "else",
+        }
+    }
+}
+
+fn resolve_ptr<'a>(ptr: &SchemaPointer, root: &'a Value) -> miette::Result<&'a Value> {
+    let mut val = root;
+    let Some(root) = root.as_object() else {
+        miette::bail!("root must be an object");
+    };
+    for elt in ptr.path.iter() {
+        match elt {
+            SchemaPointerElt::Definitions(name) => {
+                val = get_object(root, "definitions")?
+                    .ok_or_else(|| miette!("no definitions in the root"))?
+                    .get(name)
+                    .ok_or_else(|| miette!("missing {name}"))?;
+            }
+            SchemaPointerElt::Properties(name) => {
+                let Some(obj) = val.as_object() else {
+                    miette::bail!("cannot look up {} in a non-object", elt.name());
+                };
+                let Some(props) = get_object(obj, "properties")? else {
+                    miette::bail!("no \"properties\" field");
+                };
+                val = props
+                    .get(name)
+                    .ok_or_else(|| miette!("field {name} not found"))?;
+            }
+            SchemaPointerElt::ItemsIndexed(i)
+            | SchemaPointerElt::AllOf(i)
+            | SchemaPointerElt::AnyOf(i)
+            | SchemaPointerElt::OneOf(i) => {
+                let Some(obj) = val.as_object() else {
+                    miette::bail!("cannot look up {} in a non-object", elt.name());
+                };
+
+                let field = get_array(obj, elt.name())?
+                    .ok_or_else(|| miette!("field {} not found", elt.name()))?;
+
+                val = field
+                    .get(*i)
+                    .ok_or_else(|| miette!("array has no index {i}"))?;
+            }
+            SchemaPointerElt::ItemsSingle
+            | SchemaPointerElt::Contains
+            | SchemaPointerElt::AdditionalProperties
+            | SchemaPointerElt::Not
+            | SchemaPointerElt::Then
+            | SchemaPointerElt::Else => {
+                let Some(obj) = val.as_object() else {
+                    miette::bail!("cannot look up {} in a non-object", elt.name());
+                };
+
+                val = obj
+                    .get(elt.name())
+                    .ok_or(miette!("field {} not found", elt.name()))?;
+            }
+        };
+    }
+    Ok(val)
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::intermediate::resolve_references;
+
     #[test]
     fn hack() {
-        let data =
-            std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
+        // let data =
+        //     std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
+        let data = std::fs::read_to_string("examples/simple-schema/test.schema.json").unwrap();
         let val: serde_json::Value = serde_json::from_str(&data).unwrap();
         let schema: super::Schema = (&val).try_into().unwrap();
-        dbg!(schema);
+        dbg!(&schema);
+        let (_, refs) = resolve_references(&val, schema);
+        dbg!(refs);
     }
 }
