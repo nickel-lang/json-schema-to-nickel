@@ -285,7 +285,7 @@ let error_lib = import "./error.ncl" in
     always
       : Dyn
       | doc m%"
-        A contract that always succeeds. The same as `Dyn`, but maybe with a clearer name.
+        A contract that always succeeds. The same as `Dyn`, but with a more JSON-schema name.
       "%
       = std.contract.custom (fun label value => 'Ok value),
   }
