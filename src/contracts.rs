@@ -395,16 +395,13 @@ impl TryAsContract for SchemaObject {
                 },
                 Some(InstanceType::String),
             ) if only_ignored_fields(extensions) => string.try_as_contract(root_schema, refs_usage),
-            _ => {
-                dbg!(self);
-                eprintln!("NO MATCH");
-                None
-            }
+            _ => None,
         };
 
-        match instance_type {
-            Some(SimpleType::Nullable(_)) => Some(ctr?.or_null()),
-            _ => ctr,
+        if let Some(SimpleType::Nullable(_)) = instance_type {
+            Some(ctr?.or_null())
+        } else {
+            ctr
         }
     }
 }
@@ -446,7 +443,8 @@ impl TryAsContract for ObjectValidation {
                 root_schema,
                 refs_usage,
             ))),
-            // Dicts that have a regex pattern on their fields.
+            // Dicts that have a single regex pattern on their fields and no additional fields
+            // get `{ _: schema}` and  `FieldsMatch regex` contracts.
             (
                 ObjectValidation {
                     max_properties,

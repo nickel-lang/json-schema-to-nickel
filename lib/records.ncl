@@ -338,7 +338,7 @@ let error_lib = import "./error.ncl" in
           let bad_field_names =
             std.record.fields x
             |> std.array.filter (fun k => !(is_match k))
-            |> std.array.map (fun k => m%""${k}""%)
+            |> std.array.map (fun k => "`${k}`")
           in
           if std.array.length bad_field_names > 0 then
             'Error {

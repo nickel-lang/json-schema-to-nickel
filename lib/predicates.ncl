@@ -283,7 +283,6 @@ let error_lib = import "./error.ncl" in
         ),
 
     always
-      : Dyn
       | doc m%"
         A contract that always succeeds. The same as `Dyn`, but with a more JSON-schema name.
       "%

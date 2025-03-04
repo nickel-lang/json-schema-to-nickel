@@ -24,6 +24,7 @@ pub fn decode_json_ptr_part(part: &str) -> String {
     part.replace("~0", "~").replace("~1", "/")
 }
 
+/// Returns `true` if all the elements in the iterator are distinct.
 pub fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool {
     let mut seen = HashSet::new();
     for item in items {
@@ -34,6 +35,10 @@ pub fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool
     true
 }
 
+/// If this schema specifies types, returns the specified types.
+///
+/// For example, given `{ "type": ["null", "number"], ... }` this
+/// returns `Some(["null", "number"])`.
 pub fn schema_types(s: &Schema, root_schema: &RootSchema) -> Option<SingleOrVec<InstanceType>> {
     match s {
         Schema::Bool(_) => None,
@@ -47,7 +52,7 @@ pub fn schema_types(s: &Schema, root_schema: &RootSchema) -> Option<SingleOrVec<
             reference: Some(reference),
             ..
         }) => {
-            let ptr = references::resolve_ptr(reference)?;
+            let ptr = references::parse_ref(reference)?;
             let s = ptr.resolve(root_schema)?;
             schema_types(&s, root_schema)
         }
@@ -55,6 +60,7 @@ pub fn schema_types(s: &Schema, root_schema: &RootSchema) -> Option<SingleOrVec<
     }
 }
 
+/// Is this schema nothing but a `{ "type": ... }`? If so, return the list of types.
 pub fn plain_schema_types(
     s: &Schema,
     root_schema: &RootSchema,
@@ -89,7 +95,7 @@ pub fn plain_schema_types(
             metadata: _,
             extensions: _,
         }) => {
-            let ptr = references::resolve_ptr(reference)?;
+            let ptr = references::parse_ref(reference)?;
             let s = ptr.resolve(root_schema)?;
             schema_types(&s, root_schema)
         }

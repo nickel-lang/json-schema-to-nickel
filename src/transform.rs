@@ -4,6 +4,8 @@
 //! It turns out that `schemars`'s representation of schemas is pretty clunky for this
 //! purpose. Probably we want a better intermediate representation.
 
+use std::collections::HashSet;
+
 use schemars::schema::{
     ArrayValidation, ObjectValidation, RootSchema, Schema, SchemaObject, SingleOrVec,
     SubschemaValidation,
@@ -32,13 +34,33 @@ use crate::{references, utils::plain_schema_types};
 ///    },
 /// ```
 ///
-/// as a definition, and then references it in various places that might instead
-/// contain
+/// as a definition, and then references it in various places. For example,
+/// it defines a branch protection rule as
 ///
 /// ```json
-/// "type": ["object", "null"],
-/// "additionalProperties": true
+/// {
+///   "$ref": "#/definitions/eventObject",
+///   "properties": {
+///     "types": ...
+///   }
+/// }
 /// ```
+///
+/// instead of (which would be more convenient for our contract-generation
+/// analysis):
+///
+/// ```json
+/// {
+///   "type": ["object", "null"],
+///   "properties": {
+///     "types": ...
+///   },
+///   "additionalProperties": true
+/// }
+/// ```
+///
+/// This transformation inlines the "$ref", but it doesn't do the translation
+/// from "oneOf" to "type". For that, see [`lift_any_of_types`].
 pub fn merge_defs(root_schema: RootSchema) -> RootSchema {
     let mut schema = root_schema.schema.clone();
     schema.post_visit(&mut MergeDefs { root: &root_schema });
@@ -79,7 +101,7 @@ pub fn merge_defs(root_schema: RootSchema) -> RootSchema {
 /// just to have "type" at the top-level. That's what this transformation does.
 pub fn lift_any_of_types(root_schema: RootSchema) -> RootSchema {
     let mut schema = root_schema.schema.clone();
-    schema.post_visit(&mut UnionType { root: &root_schema });
+    schema.post_visit(&mut LiftAnyOfTypes { root: &root_schema });
     RootSchema {
         definitions: root_schema.definitions,
         meta_schema: root_schema.meta_schema,
@@ -87,17 +109,37 @@ pub fn lift_any_of_types(root_schema: RootSchema) -> RootSchema {
     }
 }
 
+/// A shallow merge operation for schemas.
+///
+/// JSON schemas have a lot of implicit "and" operations; to a first approximation,
+/// all of the validations in a schema are applied independently, and the schema as
+/// a whole passes if and only they all pass individually. For example,
+/// `{ "minProperties": 1, "type": ["object"] }`
+/// is equivalent to
+/// `{ "allOf": [ { "minProperties": 1 }, { "type": ["object"] } ] }`
+///
+/// This trait produces things more like the first representation, by merging
+/// schemas together to produce schemas with more fields.
+///
+/// Exceptions to the "first approximation" include things like "properties"
+/// and "additionalProperties", which cannot be validated independently.
 trait ShallowMerge: Sized {
     fn shallow_merge(self, other: &Self) -> Option<Self>;
 }
 
 impl ShallowMerge for ObjectValidation {
     fn shallow_merge(mut self, other: &Self) -> Option<Self> {
+        // Does `ov` have any of the three fields that work together?
+        fn has_interactions(ov: &ObjectValidation) -> bool {
+            !ov.properties.is_empty()
+                || ov.additional_properties.is_some()
+                || !ov.pattern_properties.is_empty()
+        }
+
         if no_clash(&self.max_properties, &other.max_properties)
             && no_clash(&self.min_properties, &other.min_properties)
             && no_clash(&self.property_names, &other.property_names)
-            && no_clash(&self.additional_properties, &other.additional_properties)
-            && (self.pattern_properties.is_empty() || other.pattern_properties.is_empty())
+            && !(has_interactions(&self) && has_interactions(other))
         {
             merge_opt(&mut self.max_properties, &other.max_properties);
             merge_opt(&mut self.min_properties, &other.min_properties);
@@ -108,6 +150,7 @@ impl ShallowMerge for ObjectValidation {
             );
             self.pattern_properties
                 .extend(other.pattern_properties.clone());
+            self.properties.extend(other.properties.clone());
             Some(self)
         } else {
             None
@@ -117,8 +160,12 @@ impl ShallowMerge for ObjectValidation {
 
 impl ShallowMerge for ArrayValidation {
     fn shallow_merge(mut self, other: &Self) -> Option<Self> {
-        if no_clash(&self.items, &other.items)
-            && no_clash(&self.additional_items, &other.additional_items)
+        // Does `av` have either of the two fields that work together?
+        fn has_interactions(av: &ArrayValidation) -> bool {
+            av.items.is_some() || av.additional_items.is_some()
+        }
+
+        if !(has_interactions(&self) && has_interactions(other))
             && no_clash(&self.max_items, &other.max_items)
             && no_clash(&self.min_items, &other.min_items)
             && no_clash(&self.unique_items, &other.unique_items)
@@ -163,6 +210,7 @@ fn merge_opt<T: Clone>(x: &mut Option<T>, y: &Option<T>) {
     }
 }
 
+/// The visitor for implementing [`merge_defs`].
 struct MergeDefs<'a> {
     root: &'a RootSchema,
 }
@@ -171,7 +219,7 @@ impl VisitorMut for MergeDefs<'_> {
     fn visit_object(&mut self, obj: &mut SchemaObject) {
         if let Some(reference) = &obj.reference {
             if let Some(referent) =
-                references::resolve_ptr(reference).and_then(|ptr| ptr.resolve(self.root))
+                references::parse_ref(reference).and_then(|ptr| ptr.resolve(self.root))
             {
                 match &*referent {
                     Schema::Bool(_) => {}
@@ -212,11 +260,18 @@ impl VisitorMut for MergeDefs<'_> {
     }
 }
 
+/// A "visitor" trait for schemas.
+///
+/// An implementation of this is really just a fancy callback, as our schema
+/// representation doesn't really have variants.
 trait VisitorMut {
     fn visit_object(&mut self, _obj: &mut SchemaObject) {}
 }
 
+/// A trait for performing post-order traversal of the schema tree.
 trait PostVisit {
+    /// Visit the schema tree, invoking the visitor on all children of a node
+    /// and then invoking it on the node itself.
     fn post_visit<V: VisitorMut>(&mut self, visitor: &mut V);
 }
 
@@ -296,11 +351,12 @@ impl PostVisit for ObjectValidation {
     }
 }
 
-struct UnionType<'a> {
+/// The visitor for implementing [`lift_any_of_types`].
+struct LiftAnyOfTypes<'a> {
     root: &'a RootSchema,
 }
 
-impl VisitorMut for UnionType<'_> {
+impl VisitorMut for LiftAnyOfTypes<'_> {
     fn visit_object(&mut self, obj: &mut SchemaObject) {
         if obj.instance_type.is_some() {
             return;
@@ -317,7 +373,7 @@ impl VisitorMut for UnionType<'_> {
                         return;
                     };
 
-                    let Some(mut plain_types) = plain_types
+                    let Some(plain_types) = plain_types
                         .into_iter()
                         .map(|tys| match tys {
                             SingleOrVec::Single(t) => Some(*t),
@@ -328,16 +384,25 @@ impl VisitorMut for UnionType<'_> {
                         return;
                     };
 
-                    // Technically, if this is `one_of` then we should filter out any repeated types.
-                    plain_types.sort();
-                    plain_types.dedup();
+                    // If there's a repeated type in a `oneOf` array then that type
+                    // is technically disallowed. (Although most likely it's a mistake.)
+                    let mut unique_types = HashSet::new();
+                    let is_one_of = subschemas.one_of.is_some();
+                    for t in plain_types {
+                        if unique_types.insert(t) && is_one_of {
+                            eprintln!("ignoring duplicated type {t:?} in oneOf");
+                            unique_types.remove(&t);
+                        }
+                    }
+
+                    let plain_types: Vec<_> = unique_types.into_iter().collect();
 
                     subschemas.any_of = None;
                     subschemas.one_of = None;
 
-                    obj.instance_type = match plain_types.len() {
-                        0 => None,
-                        1 => Some(SingleOrVec::Single(Box::new(plain_types[0]))),
+                    obj.instance_type = match plain_types.as_slice() {
+                        [] => None,
+                        [x] => Some(SingleOrVec::Single(Box::new(*x))),
                         _ => Some(SingleOrVec::Vec(plain_types)),
                     };
                 }
