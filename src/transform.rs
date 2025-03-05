@@ -61,7 +61,7 @@ use crate::{references, utils::plain_schema_types};
 ///
 /// This transformation inlines the "$ref", but it doesn't do the translation
 /// from "oneOf" to "type". For that, see [`lift_any_of_types`].
-pub fn merge_defs(root_schema: RootSchema) -> RootSchema {
+pub fn inline_defs(root_schema: RootSchema) -> RootSchema {
     let mut schema = root_schema.schema.clone();
     schema.post_visit(&mut MergeDefs { root: &root_schema });
     RootSchema {
