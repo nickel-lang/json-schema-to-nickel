@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "my_object": {
+      "$ref": "#/definitions/MyType",
+      "properties": {
+        "foo": { "type": "number" }
+      }
+    }
+  },
+  "definitions": {
+    "MyType": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    }
+  }
+}

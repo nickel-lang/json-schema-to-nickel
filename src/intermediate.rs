@@ -5,9 +5,13 @@ use std::{
 };
 
 use miette::miette;
+use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::references::{SchemaPointer, SchemaPointerElt};
+use crate::{
+    references::{SchemaPointer, SchemaPointerElt},
+    utils::distinct,
+};
 
 // See https://github.com/orgs/json-schema-org/discussions/526#discussioncomment-7559030
 // regarding the semantics of $ref in an object with other fields. Basically, we should interpret
@@ -26,7 +30,7 @@ use crate::references::{SchemaPointer, SchemaPointerElt};
 //   ]
 // }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub enum Schema {
     Always,
     Never,
@@ -50,7 +54,49 @@ pub enum Schema {
     Not(Box<Schema>),
 }
 
-#[derive(Clone, Debug)]
+impl Schema {
+    pub fn simple_type(&self, refs: &HashMap<String, Schema>) -> Option<InstanceType> {
+        fn simple_type_rec<'s>(
+            slf: &'s Schema,
+            refs: &'s HashMap<String, Schema>,
+            // Keeps track of the references we've followed to get to the current schema,
+            // as protection against infinite recursion.
+            followed: &mut HashSet<&'s str>,
+        ) -> Option<InstanceType> {
+            match slf {
+                Schema::Always => None,
+                Schema::Never => None,
+                Schema::Null => Some(InstanceType::Null),
+                Schema::Boolean => Some(InstanceType::Boolean),
+                Schema::Const(_) => None, // TODO: maybe some type "inference"?
+                Schema::Enum(_) => None,  // TODO: maybe some type "inference"?
+                Schema::Object(_) => Some(InstanceType::Object),
+                Schema::String(_) => Some(InstanceType::String),
+                Schema::Number(_) => Some(InstanceType::Number),
+                Schema::Array(_) => Some(InstanceType::Array),
+                Schema::Ref(r) => {
+                    if followed.insert(r) {
+                        let ret = refs.get(r).and_then(|s| simple_type_rec(s, refs, followed));
+                        followed.remove(r.as_str());
+                        ret
+                    } else {
+                        None
+                    }
+                }
+                Schema::AnyOf(_) => None,
+                Schema::OneOf(_) => None,
+                Schema::AllOf(_) => None,
+                Schema::Ite { els, .. } => els.simple_type(refs),
+                Schema::Not(_) => None,
+            }
+        }
+
+        let mut followed = HashSet::new();
+        simple_type_rec(self, refs, &mut followed)
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub enum Obj {
     Any,
     Properties(ObjectProperties),
@@ -62,20 +108,20 @@ pub enum Obj {
     Dependencies(HashMap<String, Dependency>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ObjectProperties {
     pub properties: HashMap<String, Schema>,
     pub pattern_properties: HashMap<String, Schema>,
     pub additional_properties: Option<Box<Schema>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub enum Dependency {
     Array(Vec<String>),
     Schema(Schema),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub enum Str {
     Any,
     MaxLength(u64),
@@ -83,7 +129,7 @@ pub enum Str {
     Pattern(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub enum Num {
     Any,
     // The json-schema reference doesn't say this has to be an integer (and
@@ -97,7 +143,7 @@ pub enum Num {
     Integer,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub enum Arr {
     Any,
     AllItems(Box<Schema>),
@@ -111,7 +157,7 @@ pub enum Arr {
     Contains(Box<Schema>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum InstanceType {
     Null,
     Boolean,
@@ -820,6 +866,91 @@ fn resolve_ptr<'a>(ptr: &SchemaPointer, root: &'a Value) -> miette::Result<&'a V
         };
     }
     Ok(val)
+}
+
+pub fn flatten_logical_ops(schema: Schema) -> Schema {
+    fn flatten_one(schema: Schema) -> Result<Schema, Infallible> {
+        let ret = match schema {
+            Schema::AnyOf(vec) | Schema::OneOf(vec) if vec.is_empty() => Schema::Never,
+            Schema::AllOf(vec) if vec.is_empty() => Schema::Always,
+
+            Schema::AnyOf(mut vec) | Schema::AllOf(mut vec) | Schema::OneOf(mut vec)
+                if vec.len() == 1 =>
+            {
+                vec.pop().unwrap()
+            }
+
+            Schema::AllOf(vec) => {
+                // This is a perfect application of Vec::extract_if, if it were stable.
+                let mut new_vec = Vec::new();
+                for elt in vec {
+                    match elt {
+                        Schema::AllOf(e) => new_vec.extend(e),
+                        Schema::Always => {}
+                        Schema::Never => {
+                            return Ok(Schema::Never);
+                        }
+                        e => new_vec.push(e),
+                    }
+                }
+                Schema::AllOf(new_vec)
+            }
+
+            Schema::AnyOf(vec) => {
+                // This is a perfect application of Vec::extract_if, if it were stable.
+                let mut new_vec = Vec::new();
+                for elt in vec {
+                    match elt {
+                        Schema::AllOf(e) => new_vec.extend(e),
+                        Schema::Always => {
+                            return Ok(Schema::Always);
+                        }
+                        Schema::Never => {}
+                        e => new_vec.push(e),
+                    }
+                }
+                Schema::AnyOf(new_vec)
+            }
+            s => s,
+        };
+        Ok(ret)
+    }
+
+    schema
+        .traverse(&mut flatten_one, TraverseOrder::BottomUp)
+        .unwrap()
+}
+
+pub fn one_to_any(schema: Schema, refs: &HashMap<String, Schema>) -> Schema {
+    fn distinct_types(s: &[Schema], refs: &HashMap<String, Schema>) -> bool {
+        let simple_types = s
+            .iter()
+            .map(|s| s.simple_type(refs))
+            .collect::<Option<Vec<_>>>();
+
+        matches!(simple_types, Some(tys) if distinct(tys.iter()))
+    }
+
+    let mut one_to_any_one = |schema: Schema| -> Result<Schema, Infallible> {
+        let ret = match schema {
+            Schema::OneOf(vec) if distinct_types(&vec, refs) => Schema::AnyOf(vec),
+            s => s,
+        };
+        Ok(ret)
+    };
+
+    schema
+        .traverse(&mut one_to_any_one, TraverseOrder::BottomUp)
+        .unwrap()
+}
+
+// TODO: add a "ref inlining" pass
+pub fn inline_refs(schema: Schema, refs: &HashMap<String, Schema>) -> Schema {
+    todo!()
+}
+
+pub fn intersect_types(schema: Schema) -> Schema {
+    todo!()
 }
 
 #[cfg(test)]
