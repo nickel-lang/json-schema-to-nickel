@@ -203,5 +203,23 @@ let error_lib = import "./error.ncl" in
           if has_duplicate then
             error_lib.mk_error "duplicate found: %{std.serialize 'Json duplicate}"
           else
-            'Ok
+            'Ok,
+
+  contract = {
+    minItems
+      | Number -> Dyn
+      | doc m%"
+        A contract that checks whether an array has at least a certain number of items.
+      "%
+      = fun n =>
+        std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length arr >= n),
+
+    maxItems
+      | Number -> Dyn
+      | doc m%"
+        A contract that checks whether an array has at most a certain number of items.
+      "%
+      = fun n =>
+        std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length arr <= n),
+  }
 }

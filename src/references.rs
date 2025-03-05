@@ -637,6 +637,68 @@ impl RefsUsage {
     }
 }
 
+/// Parses a JSON schema reference to a `SchemaPointer`, returning `None` and printing
+/// a warning if it's a kind of reference that we don't support.
+pub fn parse_ref(reference: &str) -> Option<SchemaPointer> {
+    let Ok(uri) = fluent_uri::Uri::parse(reference) else {
+        eprintln!(
+            "Warning: skipping reference `{reference}` (replaced by an always succeeding \
+                contract). Failed to parse it as valid URI."
+        );
+
+        return None;
+    };
+
+    // If the URI has anything else than a fragment, we bail out.
+    if uri.scheme().is_some()
+        || uri.authority().is_some()
+        || !uri.path().as_str().is_empty()
+        || uri.query().is_some()
+    {
+        eprintln!(
+            "Warning: skipping external reference `{reference}` (replaced by an always \
+                succeeding contract). The current version of json-schema-to-nickel only supports \
+                internal references"
+        );
+
+        return None;
+    }
+
+    // We don't support (yet) relative fragments.
+    let Some(fragment) = uri
+        .fragment()
+        .map(|fragment| fragment.decode().into_string_lossy())
+    else {
+        eprintln!(
+            "Warning: skipping reference `{reference}` (replaced by an always succeeding \
+                contract). The URI doesn't have a fragment"
+        );
+
+        return None;
+    };
+
+    let Some(stripped) = fragment.strip_prefix('/') else {
+        eprintln!(
+            "Warning: skipping reference `{reference}` (replaced by an always succeeding \
+                contract). json-schema-to-nickel doesn't handle references to element ids."
+        );
+
+        return None;
+    };
+
+    match SchemaPointer::parse(stripped) {
+        Ok(ptr) => Some(ptr),
+        Err(err) => {
+            eprintln!(
+                "Warning: skipping reference `{reference}` (replaced by an always \
+                    succeeding contract). {err}"
+            );
+
+            None
+        }
+    }
+}
+
 /// Resolve a JSON schema reference to a Nickel term. The resulting Nickel expression will have a
 /// different shape depending on the usage context and the type of reference (definition vs
 /// property).
@@ -659,64 +721,7 @@ pub fn resolve_ref(
         refs_usage: &mut RefsUsage,
         usage: RefUsageContext,
     ) -> Option<RichTerm> {
-        let Ok(uri) = fluent_uri::Uri::parse(reference) else {
-            eprintln!(
-                "Warning: skipping reference `{reference}` (replaced by an always succeeding \
-                contract). Failed to parse it as valid URI."
-            );
-
-            return None;
-        };
-
-        // If the URI has anything else than a fragment, we bail out.
-        if uri.scheme().is_some()
-            || uri.authority().is_some()
-            || !uri.path().as_str().is_empty()
-            || uri.query().is_some()
-        {
-            eprintln!(
-                "Warning: skipping external reference `{reference}` (replaced by an always \
-                succeeding contract). The current version of json-schema-to-nickel only supports \
-                internal references"
-            );
-
-            return None;
-        }
-
-        // We don't support (yet) relative fragments.
-        let Some(fragment) = uri
-            .fragment()
-            .map(|fragment| fragment.decode().into_string_lossy())
-        else {
-            eprintln!(
-                "Warning: skipping reference `{reference}` (replaced by an always succeeding \
-                contract). The URI doesn't have a fragment"
-            );
-
-            return None;
-        };
-
-        let Some(stripped) = fragment.strip_prefix('/') else {
-            eprintln!(
-                "Warning: skipping reference `{reference}` (replaced by an always succeeding \
-                contract). json-schema-to-nickel doesn't handle references to element ids."
-            );
-
-            return None;
-        };
-
-        let schema_ptr = match SchemaPointer::parse(stripped) {
-            Ok(ptr) => ptr,
-            Err(err) => {
-                eprintln!(
-                    "Warning: skipping reference `{reference}` (replaced by an always \
-                    succeeding contract). {err}"
-                );
-
-                return None;
-            }
-        };
-
+        let schema_ptr = parse_ref(reference)?;
         refs_usage.record_usage(schema_ptr.clone(), usage);
         Some(schema_ptr.access(usage))
     }
@@ -772,7 +777,7 @@ impl Environment {
 
                     let term = match usage {
                         RefUsageContext::Contract => schema
-                            .try_as_contract(&mut new_refs_usage)
+                            .try_as_contract(root_schema, &mut new_refs_usage)
                             .unwrap_or_else(|| schema.as_predicate_contract(&mut new_refs_usage))
                             .into(),
                         RefUsageContext::Predicate => {

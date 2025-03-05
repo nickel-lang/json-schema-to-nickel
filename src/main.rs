@@ -6,7 +6,7 @@ use std::{
 };
 
 use clap::Parser;
-use json_schema_to_nickel::convert;
+use json_schema_to_nickel::{convert, transform};
 use nickel_lang_core::pretty::*;
 use schemars::schema::RootSchema;
 use terminal_size::{terminal_size, Width};
@@ -39,6 +39,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let schema: RootSchema = serde_json::from_reader(f)?;
+    let schema = transform::inline_defs(schema);
+    let schema = transform::lift_any_of_types(schema);
 
     let size = terminal_size()
         .map(|(Width(w), _)| w as usize)
