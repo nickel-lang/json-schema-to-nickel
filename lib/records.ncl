@@ -57,6 +57,20 @@ let error_lib = import "./error.ncl" in
           )
           'Ok,
 
+  nuRecord
+    : {
+      properties : { _ : Dyn },
+      patternProperties : { _ : Dyn },
+      additionalProperties : [| 'Some Dyn, 'None |],
+      eager : Bool
+    } -> Dyn
+    = fun { properties, patternProperties, additionalProperties, eager } => std.contract.custom (fun label x =>
+      if !std.is_record x then
+        'Error ({ message = "expected a record" } | { message | optional | String, notes | optional | Array String })
+      else
+        'Ok x
+    ),
+
   record
     : {
       _ : Dyn -> [|
