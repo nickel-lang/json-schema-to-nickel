@@ -6,7 +6,7 @@ use nickel_lang_core::{
 };
 use schemars::schema::{InstanceType, RootSchema, Schema, SchemaObject, SingleOrVec};
 
-use crate::references;
+use crate::{references, PREDICATES_LIBRARY_ID};
 
 pub fn static_access<I, S>(record: S, fields: I) -> RichTerm
 where
@@ -15,6 +15,15 @@ where
     S: Into<LocIdent>,
 {
     make::static_access(make::var(record), fields)
+}
+
+pub fn lib_access<I, S>(fields: I) -> RichTerm
+where
+    I: IntoIterator<Item = S>,
+    I::IntoIter: DoubleEndedIterator,
+    S: Into<LocIdent>,
+{
+    make::static_access(make::var(PREDICATES_LIBRARY_ID), fields)
 }
 
 /// Replace special escaping sequences by the actual character within one element of a JSON pointer

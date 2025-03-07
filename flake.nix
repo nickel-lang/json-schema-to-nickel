@@ -101,6 +101,7 @@
         devShells.${system}.default = pkgs.mkShell {
           inputsFrom = lib.attrValues inputs.self.checks.${system};
           packages = [
+            pkgs.cargo-insta
             rust.rust-analyzer
             inputs.topiary.packages.${system}.default
             inputs.nickel.packages.${system}.default

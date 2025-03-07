@@ -5,13 +5,24 @@ use std::{
 };
 
 use miette::miette;
+use nickel_lang_core::{
+    identifier::Ident,
+    label::Label,
+    mk_app,
+    term::{
+        array::ArrayAttrs,
+        record::{Field, FieldMetadata, RecordAttrs, RecordData},
+        LabeledType, Rational, RichTerm, Term, TypeAnnotation,
+    },
+    typ::{EnumRowF, EnumRows, EnumRowsF, RecordRows, Type, TypeF},
+};
 use ordered_float::NotNan;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{
     references::{SchemaPointer, SchemaPointerElt},
-    utils::distinct,
+    utils::{distinct, lib_access, static_access},
 };
 
 // See https://github.com/orgs/json-schema-org/discussions/526#discussioncomment-7559030
@@ -30,6 +41,52 @@ use crate::{
 //     { "properties": ... }
 //   ]
 // }
+
+fn type_contract(ty: TypeF<Box<Type>, RecordRows, EnumRows, RichTerm>) -> RichTerm {
+    Term::Type {
+        typ: ty.into(),
+        // We don't actually care about the contract -- it's a runtime thing.
+        contract: Term::Null.into(),
+    }
+    .into()
+}
+
+fn num(x: NotNan<f64>) -> RichTerm {
+    // unwrap: TODO json doesn't have infinity so this should be fine. But maybe there's a
+    // better type than NotNan?
+    Term::Num(Rational::try_from(x.into_inner()).unwrap()).into()
+}
+
+fn sequence(mut contracts: Vec<RichTerm>) -> RichTerm {
+    if contracts.len() == 1 {
+        contracts.pop().unwrap()
+    } else {
+        mk_app!(
+            static_access("std", ["contract", "Sequence"]),
+            Term::Array(contracts.into_iter().collect(), ArrayAttrs::default())
+        )
+    }
+}
+
+fn eagerly_disjoint<'a>(
+    schemas: impl Iterator<Item = &'a Schema>,
+    refs: &BTreeMap<String, Schema>,
+) -> bool {
+    let mut seen_types = InstanceTypeSet::EMPTY;
+
+    for s in schemas {
+        let Some(ty) = s.simple_type(refs) else {
+            return false;
+        };
+
+        if seen_types.contains(ty) {
+            return false;
+        }
+
+        seen_types.insert(ty);
+    }
+    true
+}
 
 #[derive(Clone, Debug, Serialize, Hash, PartialEq, Eq)]
 pub enum Schema {
@@ -165,6 +222,97 @@ impl Schema {
             Schema::Not(_) => InstanceTypeSet::FULL,
         }
     }
+
+    pub fn to_contract(&self, eager: bool, refs: &BTreeMap<String, Schema>) -> Vec<RichTerm> {
+        match self {
+            Schema::Always => vec![lib_access(["Always"])],
+            Schema::Never => vec![lib_access(["Never"])],
+            Schema::Null => vec![lib_access(["Null"])],
+            Schema::Boolean => vec![type_contract(TypeF::Bool)],
+            Schema::Const(val) => {
+                let nickel_val: RichTerm = serde_json::from_value(val.clone()).unwrap();
+                if eager && (val.is_object() || val.is_array()) {
+                    vec![mk_app!(lib_access(["eager", "const"]), nickel_val)]
+                } else {
+                    vec![mk_app!(
+                        static_access("std", ["contract", "Equal"]),
+                        nickel_val
+                    )]
+                }
+            }
+            Schema::Enum(vec) => {
+                if let Some(strings) = vec.iter().map(|v| v.as_str()).collect::<Option<Vec<_>>>() {
+                    let enum_rows: EnumRows =
+                        strings.iter().fold(EnumRows(EnumRowsF::Empty), |acc, s| {
+                            let row = EnumRowF {
+                                id: Ident::new(s).into(),
+                                typ: None,
+                            };
+
+                            EnumRows(EnumRowsF::Extend {
+                                row,
+                                tail: Box::new(acc),
+                            })
+                        });
+
+                    vec![
+                        static_access("std", ["enum", "TagOrString"]),
+                        type_contract(TypeF::Enum(enum_rows)),
+                    ]
+                } else {
+                    Schema::AnyOf(vec.iter().map(|v| Schema::Const(v.clone())).collect())
+                        .to_contract(eager, refs)
+                }
+            }
+            Schema::Object(obj) => obj.to_contract(eager, refs),
+            Schema::String(s) => vec![s.to_contract()],
+            Schema::Number(num) => vec![num.to_contract()],
+            Schema::Array(arr) => vec![arr.to_contract(eager, refs)],
+            Schema::Ref(s) => vec![static_access("definitions", [s.as_str()])],
+            Schema::AnyOf(vec) => {
+                vec![if eager || !eagerly_disjoint(vec.iter(), refs) {
+                    let contracts = vec
+                        .iter()
+                        .map(|s| sequence(s.to_contract(true, refs)))
+                        .collect();
+                    mk_app!(
+                        lib_access(["any_of"]),
+                        Term::Array(contracts, ArrayAttrs::default())
+                    )
+                } else {
+                    let contracts = vec
+                        .iter()
+                        .map(|s| sequence(s.to_contract(false, refs)))
+                        .collect();
+                    mk_app!(
+                        static_access("std", ["contract", "any_of"]),
+                        Term::Array(contracts, ArrayAttrs::default())
+                    )
+                }]
+            }
+            Schema::OneOf(vec) => {
+                let contracts = vec
+                    .iter()
+                    .map(|s| sequence(s.to_contract(true, refs)))
+                    .collect();
+                vec![mk_app!(
+                    lib_access(["one_of"]),
+                    Term::Array(contracts, ArrayAttrs::default())
+                )]
+            }
+            Schema::AllOf(vec) => vec
+                .iter()
+                .flat_map(|s| s.to_contract(eager, refs))
+                .collect(),
+            Schema::Ite { iph, then, els } => todo!(),
+            Schema::Not(schema) => {
+                vec![mk_app!(
+                    static_access("std", ["contract", "not"]),
+                    sequence(schema.to_contract(eager, refs))
+                )]
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
@@ -179,11 +327,142 @@ pub enum Obj {
     Dependencies(BTreeMap<String, Dependency>),
 }
 
+impl Obj {
+    pub fn to_contract(&self, eager: bool, refs: &BTreeMap<String, Schema>) -> Vec<RichTerm> {
+        match self {
+            Obj::Any => vec![type_contract(TypeF::Dict {
+                type_fields: Box::new(TypeF::Dyn.into()),
+                flavour: nickel_lang_core::typ::DictTypeFlavour::Contract,
+            })],
+            Obj::Properties(op) => {
+                vec![op.to_special_contract(eager, refs).unwrap_or_else(|| {
+                    let f = if eager {
+                        lib_access(["records", "eager", "record"])
+                    } else {
+                        lib_access(["records", "record"])
+                    };
+                    let additional_allowed =
+                        !matches!(op.additional_properties.as_deref(), Some(Schema::Never));
+                    let additional_contract = match op.additional_properties.as_deref() {
+                        Some(s) => sequence(s.to_contract(eager, refs)),
+                        None => type_contract(TypeF::Dyn),
+                    };
+                    mk_app!(
+                        f,
+                        Term::Record(RecordData::with_field_values(
+                            op.properties
+                                .iter()
+                                .map(|(k, v)| (k.into(), sequence(v.to_contract(eager, refs))))
+                        )),
+                        Term::Record(RecordData::with_field_values(
+                            op.pattern_properties
+                                .iter()
+                                .map(|(k, v)| (k.into(), sequence(v.to_contract(eager, refs))))
+                        )),
+                        Term::Bool(additional_allowed),
+                        additional_contract
+                    )
+                })]
+            }
+            Obj::MaxProperties(n) => {
+                vec![mk_app!(
+                    lib_access(["object", "max_properties"]),
+                    Term::Num((*n).into())
+                )]
+            }
+            Obj::MinProperties(n) => {
+                vec![mk_app!(
+                    lib_access(["object", "min_properties"]),
+                    Term::Num((*n).into())
+                )]
+            }
+            Obj::Required(names) => {
+                vec![mk_app!(
+                    lib_access(["object", "required"]),
+                    Term::Array(
+                        names.iter().map(|s| Term::Str(s.into()).into()).collect(),
+                        ArrayAttrs::default()
+                    )
+                )]
+            }
+            Obj::PropertyNames(schema) => {
+                vec![mk_app!(
+                    lib_access(["object", "property_names"]),
+                    sequence(schema.to_contract(eager, refs))
+                )]
+            }
+            Obj::Dependencies(btree_map) => todo!(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub struct ObjectProperties {
     pub properties: BTreeMap<String, Schema>,
     pub pattern_properties: BTreeMap<String, Schema>,
     pub additional_properties: Option<Box<Schema>>,
+}
+
+impl ObjectProperties {
+    pub fn to_special_contract(
+        &self,
+        eager: bool,
+        refs: &BTreeMap<String, Schema>,
+    ) -> Option<RichTerm> {
+        let trivial_additional = matches!(
+            self.additional_properties.as_deref(),
+            None | Some(Schema::Always) | Some(Schema::Never)
+        );
+        let trivial_properties = self.properties.values().all(|s| s == &Schema::Always);
+        if self.pattern_properties.is_empty()
+            && trivial_additional
+            && (!eager || trivial_properties)
+        {
+            let open = matches!(
+                self.additional_properties.as_deref(),
+                None | Some(Schema::Always)
+            );
+
+            let fields = self.properties.iter().map(|(name, schema)| {
+                (
+                    name.into(),
+                    Field {
+                        metadata: FieldMetadata {
+                            annotation: TypeAnnotation {
+                                typ: None,
+                                contracts: schema
+                                    .to_contract(eager, refs)
+                                    .into_iter()
+                                    .map(|c| LabeledType {
+                                        typ: TypeF::Contract(c).into(),
+                                        label: Label::dummy(),
+                                    })
+                                    .collect(),
+                            },
+                            opt: true, // TODO
+                            doc: None, // TODO
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+            });
+
+            Some(
+                Term::Record(RecordData {
+                    fields: fields.collect(),
+                    attrs: RecordAttrs {
+                        open,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                })
+                .into(),
+            )
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
@@ -200,6 +479,17 @@ pub enum Str {
     Pattern(String),
 }
 
+impl Str {
+    pub fn to_contract(&self) -> RichTerm {
+        match self {
+            Str::Any => todo!(),
+            Str::MaxLength(_) => todo!(),
+            Str::MinLength(_) => todo!(),
+            Str::Pattern(_) => todo!(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Num {
     Any,
@@ -214,6 +504,26 @@ pub enum Num {
     Integer,
 }
 
+impl Num {
+    pub fn to_contract(&self) -> RichTerm {
+        match self {
+            Num::Any => type_contract(TypeF::Number),
+            Num::MultipleOf(n) => {
+                mk_app!(lib_access(["number", "multipleOf"]), Term::Num((*n).into()))
+            }
+            Num::Maximum(x) => mk_app!(lib_access(["number", "maximum"]), num(*x)),
+            Num::Minimum(x) => mk_app!(lib_access(["number", "minimum"]), num(*x)),
+            Num::ExclusiveMinimum(x) => {
+                mk_app!(lib_access(["number", "exclusiveMinimum"]), num(*x))
+            }
+            Num::ExclusiveMaximum(x) => {
+                mk_app!(lib_access(["number", "exclusiveMaximum"]), num(*x))
+            }
+            Num::Integer => static_access("std", ["number", "Integer"]),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Arr {
     Any,
@@ -226,6 +536,12 @@ pub enum Arr {
     MinItems(u64),
     UniqueItems,
     Contains(Box<Schema>),
+}
+
+impl Arr {
+    pub fn to_contract(&self, eager: bool, refs: &BTreeMap<String, Schema>) -> RichTerm {
+        todo!()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1175,6 +1491,10 @@ pub fn intersect_types(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schem
 
 #[cfg(test)]
 mod tests {
+    use std::io::stdout;
+
+    use nickel_lang_core::pretty::*;
+
     use super::*;
 
     #[test]
@@ -1196,5 +1516,10 @@ mod tests {
         let schema = inline_refs(schema, &refs);
         let schema = simplify(schema, &refs);
         dbg!(&schema);
+
+        let rt = dbg!(schema.to_contract(false, &refs));
+        let pretty_alloc = Allocator::default();
+        let out = sequence(rt).pretty(&pretty_alloc);
+        out.render(80, &mut stdout()).unwrap();
     }
 }
