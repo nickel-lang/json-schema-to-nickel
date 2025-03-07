@@ -1,4 +1,5 @@
 {
+  "$comment": "#/definitions/MyType should get inlined",
   "type": "object",
   "properties": {
     "my_object": {

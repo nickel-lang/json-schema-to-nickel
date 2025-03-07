@@ -1,0 +1,15 @@
+---
+source: tests/transforms.rs
+assertion_line: 41
+expression: schema
+---
+Object(Properties(ObjectProperties(
+  properties: {
+    "my_object": AllOf([
+      Number(Minimum(3.0)),
+      Number(Maximum(5.0)),
+    ]),
+  },
+  pattern_properties: {},
+  additional_properties: None,
+)))

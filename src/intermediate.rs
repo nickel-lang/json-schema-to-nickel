@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     references::{SchemaPointer, SchemaPointerElt},
-    utils::{dedup, distinct},
+    utils::distinct,
 };
 
 // See https://github.com/orgs/json-schema-org/discussions/526#discussioncomment-7559030
@@ -55,6 +55,21 @@ pub enum Schema {
     Not(Box<Schema>),
 }
 
+fn apparent_type(value: &Value) -> InstanceType {
+    match value {
+        Value::Null => InstanceType::Null,
+        Value::Bool(_) => InstanceType::Boolean,
+        Value::Number(_) => InstanceType::Number,
+        Value::String(_) => InstanceType::String,
+        Value::Array(_) => InstanceType::Array,
+        Value::Object(_) => InstanceType::Object,
+    }
+}
+
+fn apparent_types<'a>(values: impl IntoIterator<Item = &'a Value>) -> InstanceTypeSet {
+    values.into_iter().map(apparent_type).collect()
+}
+
 impl Schema {
     pub fn simple_type(&self, refs: &BTreeMap<String, Schema>) -> Option<InstanceType> {
         fn simple_type_rec<'s>(
@@ -69,8 +84,14 @@ impl Schema {
                 Schema::Never => None,
                 Schema::Null => Some(InstanceType::Null),
                 Schema::Boolean => Some(InstanceType::Boolean),
-                Schema::Const(_) => None, // TODO: maybe some type "inference"?
-                Schema::Enum(_) => None,  // TODO: maybe some type "inference"?
+                Schema::Const(v) => Some(apparent_type(v)),
+                Schema::Enum(vs) => {
+                    if let Some(ty) = vs.first().map(apparent_type) {
+                        vs.iter().map(apparent_type).all(|u| u == ty).then_some(ty)
+                    } else {
+                        None
+                    }
+                }
                 Schema::Object(_) => Some(InstanceType::Object),
                 Schema::String(_) => Some(InstanceType::String),
                 Schema::Number(_) => Some(InstanceType::Number),
@@ -124,8 +145,8 @@ impl Schema {
             Schema::Never => InstanceTypeSet::EMPTY,
             Schema::Null => InstanceTypeSet::singleton(InstanceType::Null),
             Schema::Boolean => InstanceTypeSet::singleton(InstanceType::Boolean),
-            Schema::Const(_) => InstanceTypeSet::FULL, // TODO: type "inference"
-            Schema::Enum(_) => InstanceTypeSet::FULL,  // TODO: type "inference"
+            Schema::Const(v) => InstanceTypeSet::singleton(apparent_type(v)),
+            Schema::Enum(vs) => apparent_types(vs),
             Schema::Object(_) => InstanceTypeSet::singleton(InstanceType::Object),
             Schema::String(_) => InstanceTypeSet::singleton(InstanceType::String),
             Schema::Number(_) => InstanceTypeSet::singleton(InstanceType::Number),
@@ -324,14 +345,13 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
             .ok_or_else(|| miette!("schema must be an object"))?;
 
         let mut num_schemas = Vec::new();
-        // TODO: rewrite as InstanceTypeSet
         let types = match obj.get("type") {
             Some(tys) => {
                 if let Some(s) = tys.as_str() {
                     if s == "integer" {
                         num_schemas.push(Schema::Number(Num::Integer));
                     }
-                    vec![s.parse()?]
+                    InstanceTypeSet::singleton(s.parse()?)
                 } else if let Some(a) = tys.as_array() {
                     if a.iter().any(|v| v.as_str() == Some("integer")) {
                         num_schemas.push(Schema::Number(Num::Integer));
@@ -344,33 +364,26 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
                                 .ok_or_else(|| miette!("instance type element must be a string"))?
                                 .parse()
                         })
-                        .collect::<miette::Result<Vec<_>>>()?
+                        .collect::<miette::Result<InstanceTypeSet>>()?
                 } else {
                     miette::bail!("instance type must be a string or an array");
                 }
             }
-            None => vec![
-                InstanceType::Null,
-                InstanceType::Boolean,
-                InstanceType::Object,
-                InstanceType::Array,
-                InstanceType::Number,
-                InstanceType::String,
-            ],
+            None => InstanceTypeSet::FULL,
         };
 
         let mut and_schemas = Vec::new();
         let mut or_schemas = Vec::new();
 
-        if types.contains(&InstanceType::Null) {
+        if types.contains(InstanceType::Null) {
             or_schemas.push(Schema::Null);
         }
 
-        if types.contains(&InstanceType::Boolean) {
+        if types.contains(InstanceType::Boolean) {
             or_schemas.push(Schema::Boolean);
         }
 
-        if types.contains(&InstanceType::Number) {
+        if types.contains(InstanceType::Number) {
             num_schemas.extend(extract_number_schemas(obj)?);
             if !num_schemas.iter().any(|s| matches!(s, Schema::Number(_))) {
                 num_schemas.push(Schema::Number(Num::Any));
@@ -379,7 +392,7 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
             or_schemas.push(Schema::AllOf(num_schemas));
         }
 
-        if types.contains(&InstanceType::String) {
+        if types.contains(InstanceType::String) {
             let mut str_schemas = extract_string_schemas(obj)?;
             if str_schemas.is_empty() {
                 str_schemas.push(Schema::String(Str::Any));
@@ -388,7 +401,7 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
             or_schemas.push(Schema::AllOf(str_schemas));
         }
 
-        if types.contains(&InstanceType::Object) {
+        if types.contains(InstanceType::Object) {
             let mut obj_schemas = extract_object_schemas(obj)?;
             if obj_schemas.is_empty() {
                 obj_schemas.push(Schema::Object(Obj::Any));
@@ -397,7 +410,7 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
             or_schemas.push(Schema::AllOf(obj_schemas));
         }
 
-        if types.contains(&InstanceType::Array) {
+        if types.contains(InstanceType::Array) {
             let mut arr_schemas = extract_array_schemas(obj)?;
             if arr_schemas.is_empty() {
                 arr_schemas.push(Schema::Array(Arr::Any));
