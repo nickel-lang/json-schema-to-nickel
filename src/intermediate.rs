@@ -324,6 +324,7 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
             .ok_or_else(|| miette!("schema must be an object"))?;
 
         let mut num_schemas = Vec::new();
+        // TODO: rewrite as InstanceTypeSet
         let types = match obj.get("type") {
             Some(tys) => {
                 if let Some(s) = tys.as_str() {
@@ -405,18 +406,20 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
             or_schemas.push(Schema::AllOf(arr_schemas));
         }
 
-        if let Some(any_of) = get_non_empty_array(obj, "anyOf")? {
-            for value in any_of {
-                or_schemas.push(value.try_into()?);
-            }
-        }
-
         if !or_schemas.is_empty() {
             and_schemas.push(Schema::AnyOf(or_schemas));
         }
 
-        let mut one_of_schemas = Vec::new();
+        if let Some(any_of) = get_non_empty_array(obj, "anyOf")? {
+            let mut any_of_schemas = Vec::new();
+            for value in any_of {
+                any_of_schemas.push(value.try_into()?);
+            }
+            and_schemas.push(Schema::AnyOf(any_of_schemas));
+        }
+
         if let Some(one_of) = get_non_empty_array(obj, "oneOf")? {
+            let mut one_of_schemas = Vec::new();
             for value in one_of {
                 one_of_schemas.push(value.try_into()?);
             }
@@ -1027,7 +1030,7 @@ pub fn flatten_logical_ops(schema: Schema) -> Schema {
                 let mut new_vec = Vec::new();
                 for elt in vec {
                     match elt {
-                        Schema::AllOf(e) => new_vec.extend(e),
+                        Schema::AnyOf(e) => new_vec.extend(e),
                         Schema::Always => {
                             return Ok(Schema::Always);
                         }
@@ -1159,7 +1162,7 @@ pub fn intersect_types(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schem
 
 #[cfg(test)]
 mod tests {
-    use crate::intermediate::resolve_references;
+    use super::*;
 
     #[test]
     fn hack() {
@@ -1169,7 +1172,16 @@ mod tests {
         let val: serde_json::Value = serde_json::from_str(&data).unwrap();
         let schema: super::Schema = (&val).try_into().unwrap();
         dbg!(&schema);
-        let (_, refs) = resolve_references(&val, schema);
-        dbg!(refs);
+        let (schema, refs) = resolve_references(&val, schema);
+        dbg!(&refs);
+
+        let refs = refs
+            .iter()
+            .map(|(k, v)| (k.clone(), simplify(v.clone(), &refs)))
+            .collect();
+        dbg!(&refs);
+        let schema = inline_refs(schema, &refs);
+        let schema = simplify(schema, &refs);
+        dbg!(&schema);
     }
 }
