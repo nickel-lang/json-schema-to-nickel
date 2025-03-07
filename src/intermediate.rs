@@ -349,11 +349,9 @@ impl Obj {
                     };
                     mk_app!(
                         f,
-                        Term::Record(RecordData::with_field_values(
-                            op.properties
-                                .iter()
-                                .map(|(k, v)| (k.into(), sequence(v.to_contract(eager, refs))))
-                        )),
+                        Term::Record(RecordData::with_field_values(op.properties.iter().map(
+                            |(k, v)| (k.into(), sequence(v.schema.to_contract(eager, refs)))
+                        ))),
                         Term::Record(RecordData::with_field_values(
                             op.pattern_properties
                                 .iter()
@@ -397,8 +395,25 @@ impl Obj {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
+pub struct Property {
+    doc: Option<String>,
+    schema: Schema,
+    optional: bool,
+}
+
+impl From<Schema> for Property {
+    fn from(s: Schema) -> Self {
+        Property {
+            doc: None,
+            schema: s,
+            optional: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub struct ObjectProperties {
-    pub properties: BTreeMap<String, Schema>,
+    pub properties: BTreeMap<String, Property>,
     pub pattern_properties: BTreeMap<String, Schema>,
     pub additional_properties: Option<Box<Schema>>,
 }
@@ -413,7 +428,7 @@ impl ObjectProperties {
             self.additional_properties.as_deref(),
             None | Some(Schema::Always) | Some(Schema::Never)
         );
-        let trivial_properties = self.properties.values().all(|s| s == &Schema::Always);
+        let trivial_properties = self.properties.values().all(|p| p.schema == Schema::Always);
         if self.pattern_properties.is_empty()
             && trivial_additional
             && (!eager || trivial_properties)
@@ -423,14 +438,15 @@ impl ObjectProperties {
                 None | Some(Schema::Always)
             );
 
-            let fields = self.properties.iter().map(|(name, schema)| {
+            let fields = self.properties.iter().map(|(name, prop)| {
                 (
                     name.into(),
                     Field {
                         metadata: FieldMetadata {
                             annotation: TypeAnnotation {
                                 typ: None,
-                                contracts: schema
+                                contracts: prop
+                                    .schema
                                     .to_contract(eager, refs)
                                     .into_iter()
                                     .map(|c| LabeledType {
@@ -439,8 +455,8 @@ impl ObjectProperties {
                                     })
                                     .collect(),
                             },
-                            opt: true, // TODO
-                            doc: None, // TODO
+                            opt: prop.optional,
+                            doc: prop.doc.clone(), // TODO: fill out the doc
                             ..Default::default()
                         },
                         ..Default::default()
@@ -1000,7 +1016,7 @@ fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
     if let Some(props) = get_object(obj, "properties")? {
         properties.properties = props
             .iter()
-            .map(|(k, v)| Ok((k.to_owned(), v.try_into()?)))
+            .map(|(k, v)| Ok((k.to_owned(), Schema::try_from(v)?.into())))
             .collect::<miette::Result<_>>()?;
     };
     if let Some(pats) = get_object(obj, "patternProperties")? {
@@ -1156,6 +1172,19 @@ impl<K: Ord + Eq + std::fmt::Debug, S, T: Traverse<S>> Traverse<S> for BTreeMap<
         self.into_iter()
             .map(|(k, v)| Ok((k, v.traverse(f, order)?)))
             .collect()
+    }
+}
+
+impl Traverse<Schema> for Property {
+    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    where
+        F: FnMut(Schema) -> Result<Schema, E>,
+    {
+        Ok(Property {
+            doc: self.doc,
+            optional: self.optional,
+            schema: self.schema.traverse(f, order)?,
+        })
     }
 }
 
@@ -1408,6 +1437,7 @@ pub fn simplify(mut schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
         schema = flatten_logical_ops(schema);
         schema = one_to_any(schema, refs);
         schema = intersect_types(schema, refs);
+        schema = merge_required_properties(schema);
 
         if schema == prev {
             return schema;
@@ -1437,6 +1467,51 @@ pub fn inline_refs(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
 
     schema
         .traverse(&mut inline_one, TraverseOrder::BottomUp)
+        .unwrap()
+}
+
+pub fn merge_required_properties(schema: Schema) -> Schema {
+    let mut merge_one = |schema: Schema| -> Result<Schema, Infallible> {
+        let ret = match schema {
+            Schema::AllOf(vec) => {
+                let mut required = BTreeSet::new();
+                let mut props = Vec::new();
+                let mut new_vec = Vec::new();
+
+                for s in vec {
+                    match s {
+                        Schema::Object(Obj::Required(strings)) => {
+                            required.extend(strings.into_iter())
+                        }
+                        Schema::Object(Obj::Properties(p)) => props.push(p),
+                        s => new_vec.push(s),
+                    }
+                }
+
+                let mut unused_required = required.clone();
+
+                for mut p in props {
+                    for (name, prop) in p.properties.iter_mut() {
+                        if required.contains(name) {
+                            unused_required.remove(name);
+                            prop.optional = false;
+                        }
+                    }
+                    new_vec.push(Schema::Object(Obj::Properties(p)));
+                }
+
+                if !unused_required.is_empty() {
+                    new_vec.push(Schema::Object(Obj::Required(unused_required)))
+                }
+                Schema::AllOf(new_vec)
+            }
+            s => s,
+        };
+        Ok(ret)
+    };
+
+    schema
+        .traverse(&mut merge_one, TraverseOrder::BottomUp)
         .unwrap()
 }
 
