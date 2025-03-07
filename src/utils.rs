@@ -34,6 +34,13 @@ pub fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool
     true
 }
 
+pub fn dedup<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> Vec<T> {
+    items
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+}
+
 pub fn schema_types(s: &Schema, root_schema: &RootSchema) -> Option<SingleOrVec<InstanceType>> {
     match s {
         Schema::Bool(_) => None,

@@ -1,5 +1,5 @@
 use insta::assert_ron_snapshot;
-use json_schema_to_nickel::intermediate;
+use json_schema_to_nickel::intermediate::{self, resolve_references};
 use libtest_mimic::{Arguments, Trial};
 use std::{path::Path, process::ExitCode};
 
@@ -28,7 +28,15 @@ fn snapshot_ir(path: &Path, name: &str) {
     let file = std::fs::read_to_string(path).unwrap();
     let val: serde_json::Value = serde_json::from_str(&file).unwrap();
     let schema: intermediate::Schema = (&val).try_into().unwrap();
-    let schema = intermediate::flatten_logical_ops(schema);
+
+    let (schema, refs) = resolve_references(&val, schema);
+    let refs = refs
+        .iter()
+        .map(|(k, v)| (k.clone(), intermediate::simplify(v.clone(), &refs)))
+        .collect();
+    dbg!(&refs);
+    let schema = intermediate::inline_refs(schema, &refs);
+    let schema = intermediate::simplify(schema, &refs);
 
     assert_ron_snapshot!(name, schema);
 }

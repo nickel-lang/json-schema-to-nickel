@@ -1,16 +1,17 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     convert::Infallible,
     str::FromStr,
 };
 
 use miette::miette;
+use ordered_float::NotNan;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{
     references::{SchemaPointer, SchemaPointerElt},
-    utils::distinct,
+    utils::{dedup, distinct},
 };
 
 // See https://github.com/orgs/json-schema-org/discussions/526#discussioncomment-7559030
@@ -30,7 +31,7 @@ use crate::{
 //   ]
 // }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Hash, PartialEq, Eq)]
 pub enum Schema {
     Always,
     Never,
@@ -54,11 +55,64 @@ pub enum Schema {
     Not(Box<Schema>),
 }
 
+#[derive(Clone, Debug, PartialEq, PartialOrd, Ord, Eq)]
+pub enum SchemaOrder<'a> {
+    Always,
+    Never,
+    Null,
+    Boolean,
+    Const,
+    Enum,
+    Object,
+    String,
+    Number,
+    Array,
+    Ref(&'a str),
+    AnyOf(&'a [Schema]),
+    OneOf(&'a [Schema]),
+    AllOf(&'a [Schema]),
+    Ite,
+    Not(&'a Schema),
+}
+
+impl Ord for Schema {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        fn order(s: &Schema) -> SchemaOrder<'_> {
+            match s {
+                Schema::Always => SchemaOrder::Always,
+                Schema::Never => SchemaOrder::Never,
+                Schema::Null => SchemaOrder::Null,
+                Schema::Boolean => SchemaOrder::Boolean,
+                Schema::Const(_) => SchemaOrder::Const,
+                Schema::Enum(_) => SchemaOrder::Enum,
+                Schema::Object(_) => SchemaOrder::Object,
+                Schema::String(_) => SchemaOrder::String,
+                Schema::Number(_) => SchemaOrder::Number,
+                Schema::Array(_) => SchemaOrder::Array,
+                Schema::Ref(s) => SchemaOrder::Ref(s.as_str()),
+                Schema::AnyOf(vec) => SchemaOrder::AnyOf(vec),
+                Schema::OneOf(vec) => SchemaOrder::OneOf(vec),
+                Schema::AllOf(vec) => SchemaOrder::AllOf(vec),
+                Schema::Ite { .. } => SchemaOrder::Ite,
+                Schema::Not(schema) => SchemaOrder::Not(schema),
+            }
+        }
+
+        order(self).cmp(&order(other))
+    }
+}
+
+impl PartialOrd for Schema {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 impl Schema {
-    pub fn simple_type(&self, refs: &HashMap<String, Schema>) -> Option<InstanceType> {
+    pub fn simple_type(&self, refs: &BTreeMap<String, Schema>) -> Option<InstanceType> {
         fn simple_type_rec<'s>(
             slf: &'s Schema,
-            refs: &'s HashMap<String, Schema>,
+            refs: &'s BTreeMap<String, Schema>,
             // Keeps track of the references we've followed to get to the current schema,
             // as protection against infinite recursion.
             followed: &mut HashSet<&'s str>,
@@ -94,34 +148,46 @@ impl Schema {
         let mut followed = HashSet::new();
         simple_type_rec(self, refs, &mut followed)
     }
+
+    pub fn just_type(&self) -> Option<InstanceType> {
+        match self {
+            Schema::Null => Some(InstanceType::Null),
+            Schema::Boolean => Some(InstanceType::Boolean),
+            Schema::Object(Obj::Any) => Some(InstanceType::Object),
+            Schema::Array(Arr::Any) => Some(InstanceType::Array),
+            Schema::String(Str::Any) => Some(InstanceType::String),
+            Schema::Number(Num::Any) => Some(InstanceType::Number),
+            _ => None,
+        }
+    }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Obj {
     Any,
     Properties(ObjectProperties),
     MaxProperties(u64),
     MinProperties(u64),
-    Required(HashSet<String>),
+    Required(BTreeSet<String>),
     // This could be simplified maybe, because we're guaranteed that this will only need to validate strings.
     PropertyNames(Box<Schema>),
-    Dependencies(HashMap<String, Dependency>),
+    Dependencies(BTreeMap<String, Dependency>),
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub struct ObjectProperties {
-    pub properties: HashMap<String, Schema>,
-    pub pattern_properties: HashMap<String, Schema>,
+    pub properties: BTreeMap<String, Schema>,
+    pub pattern_properties: BTreeMap<String, Schema>,
     pub additional_properties: Option<Box<Schema>>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Dependency {
     Array(Vec<String>),
     Schema(Schema),
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Str {
     Any,
     MaxLength(u64),
@@ -129,21 +195,21 @@ pub enum Str {
     Pattern(String),
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Num {
     Any,
     // The json-schema reference doesn't say this has to be an integer (and
     // if it isn't an integer it doesn't specify how rounding is supposed to
     // be handled).
     MultipleOf(i64),
-    Maximum(f64),
-    Minimum(f64),
-    ExclusiveMinimum(f64),
-    ExclusiveMaximum(f64),
+    Maximum(NotNan<f64>),
+    Minimum(NotNan<f64>),
+    ExclusiveMinimum(NotNan<f64>),
+    ExclusiveMaximum(NotNan<f64>),
     Integer,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Arr {
     Any,
     AllItems(Box<Schema>),
@@ -157,7 +223,7 @@ pub enum Arr {
     Contains(Box<Schema>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum InstanceType {
     Null,
     Boolean,
@@ -165,6 +231,15 @@ pub enum InstanceType {
     Array,
     Number,
     String,
+}
+
+impl InstanceType {
+    fn all() -> HashSet<Self> {
+        use InstanceType::*;
+        [Null, Boolean, Object, Array, Number, String]
+            .into_iter()
+            .collect()
+    }
 }
 
 impl FromStr for InstanceType {
@@ -471,16 +546,20 @@ fn extract_number_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
         ret.push(Schema::Number(Num::MultipleOf(mult)));
     }
     if let Some(max) = get_number(obj, "maximum")? {
-        ret.push(Schema::Number(Num::Maximum(max)));
+        ret.push(Schema::Number(Num::Maximum(NotNan::try_from(max).unwrap())));
     }
     if let Some(min) = get_number(obj, "minimum")? {
-        ret.push(Schema::Number(Num::Minimum(min)));
+        ret.push(Schema::Number(Num::Minimum(NotNan::try_from(min).unwrap())));
     }
     if let Some(ex_max) = get_number(obj, "exclusiveMaximum")? {
-        ret.push(Schema::Number(Num::ExclusiveMaximum(ex_max)));
+        ret.push(Schema::Number(Num::ExclusiveMaximum(
+            NotNan::try_from(ex_max).unwrap(),
+        )));
     }
     if let Some(ex_min) = get_number(obj, "exclusiveMinimum")? {
-        ret.push(Schema::Number(Num::ExclusiveMinimum(ex_min)));
+        ret.push(Schema::Number(Num::ExclusiveMinimum(
+            NotNan::try_from(ex_min).unwrap(),
+        )));
     }
 
     Ok(ret)
@@ -499,7 +578,7 @@ fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
     }
     if let Some(req) = get_array(obj, "required")? {
         if !req.is_empty() {
-            let req: HashSet<String> = req
+            let req: BTreeSet<String> = req
                 .iter()
                 .map(|name| {
                     name.as_str()
@@ -516,7 +595,7 @@ fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
         ))));
     }
     if let Some(deps) = get_object(obj, "dependencies")? {
-        let mut deps_map = HashMap::new();
+        let mut deps_map = BTreeMap::new();
         for (field, val) in deps {
             if let Some(arr) = val.as_array() {
                 let names = arr
@@ -535,8 +614,8 @@ fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
     }
 
     let mut properties = ObjectProperties {
-        properties: HashMap::new(),
-        pattern_properties: HashMap::new(),
+        properties: BTreeMap::new(),
+        pattern_properties: BTreeMap::new(),
         additional_properties: None,
     };
     if let Some(props) = get_object(obj, "properties")? {
@@ -690,13 +769,13 @@ impl<S, T: Traverse<S>> Traverse<S> for Vec<T> {
     }
 }
 
-impl<K: std::hash::Hash + Eq + std::fmt::Debug, S, T: Traverse<S>> Traverse<S> for HashMap<K, T> {
+impl<K: Ord + Eq + std::fmt::Debug, S, T: Traverse<S>> Traverse<S> for BTreeMap<K, T> {
     fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
     where
         F: FnMut(S) -> Result<S, E>,
     {
         self.into_iter()
-            .map(|(k, v)| Ok((dbg!(k), v.traverse(f, order)?)))
+            .map(|(k, v)| Ok((k, v.traverse(f, order)?)))
             .collect()
     }
 }
@@ -751,8 +830,8 @@ impl Traverse<Schema> for Arr {
     }
 }
 
-pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, HashMap<String, Schema>) {
-    let mut refs = HashMap::new();
+pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, BTreeMap<String, Schema>) {
+    let mut refs = BTreeMap::new();
     let mut record_ref = |schema: Schema| -> Result<Schema, Infallible> {
         if let Schema::Ref(s) = schema {
             let Some(stripped) = s.strip_prefix("#/") else {
@@ -921,8 +1000,8 @@ pub fn flatten_logical_ops(schema: Schema) -> Schema {
         .unwrap()
 }
 
-pub fn one_to_any(schema: Schema, refs: &HashMap<String, Schema>) -> Schema {
-    fn distinct_types(s: &[Schema], refs: &HashMap<String, Schema>) -> bool {
+pub fn one_to_any(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
+    fn distinct_types(s: &[Schema], refs: &BTreeMap<String, Schema>) -> bool {
         let simple_types = s
             .iter()
             .map(|s| s.simple_type(refs))
@@ -944,13 +1023,117 @@ pub fn one_to_any(schema: Schema, refs: &HashMap<String, Schema>) -> Schema {
         .unwrap()
 }
 
-// TODO: add a "ref inlining" pass
-pub fn inline_refs(schema: Schema, refs: &HashMap<String, Schema>) -> Schema {
-    todo!()
+pub fn simplify(mut schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
+    loop {
+        let prev = schema.clone();
+        schema = flatten_logical_ops(schema);
+        schema = one_to_any(schema, refs);
+        schema = intersect_types(schema, refs);
+        schema = drop_duplicates(schema);
+
+        if schema == prev {
+            return schema;
+        }
+    }
 }
 
-pub fn intersect_types(schema: Schema) -> Schema {
-    todo!()
+pub fn inline_refs(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
+    let mut inline_one = |schema: Schema| -> Result<Schema, Infallible> {
+        let ret = match schema {
+            Schema::Ref(s) => match refs.get(&s) {
+                // The ref-inlining heuristic could use some work. We probably
+                // want to avoid inlining large schemas, and we probably want to
+                // prioritize inlining things that can lead to further simplication.
+                Some(resolved @ Schema::AnyOf(tys))
+                    if tys.iter().all(|ty| ty.just_type().is_some()) =>
+                {
+                    resolved.clone()
+                }
+                Some(_) => Schema::Ref(s),
+                None => Schema::Always,
+            },
+            s => s,
+        };
+        Ok(ret)
+    };
+
+    schema
+        .traverse(&mut inline_one, TraverseOrder::BottomUp)
+        .unwrap()
+}
+
+pub fn intersect_types(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
+    let mut intersect_one = |schema: Schema| -> Result<Schema, Infallible> {
+        let ret = match schema {
+            Schema::AllOf(mut vec) => {
+                // The set of allowed types is the intersection, over all elements of `vec`,
+                // of that schema's set of allowed types.
+                let mut allowed_types = InstanceType::all();
+
+                for s in &vec {
+                    if let Some(ty) = s.simple_type(refs) {
+                        allowed_types.retain(|allowed| *allowed == ty);
+                    } else if let Schema::AnyOf(any_of) = &s {
+                        if let Some(any_of_tys) = any_of
+                            .iter()
+                            .map(|s| s.simple_type(refs))
+                            .collect::<Option<HashSet<InstanceType>>>()
+                        {
+                            allowed_types =
+                                allowed_types.intersection(&any_of_tys).copied().collect();
+                        }
+                    }
+                }
+
+                for s in &mut vec {
+                    if let Some(ty) = s.simple_type(refs) {
+                        if !allowed_types.contains(&ty) {
+                            return Ok(Schema::Never);
+                        }
+                    }
+
+                    if let Schema::AnyOf(any_of) = s {
+                        any_of.retain(|s| {
+                            s.simple_type(refs)
+                                .is_none_or(|ty| allowed_types.contains(&ty))
+                        });
+                    }
+                }
+
+                Schema::AllOf(vec)
+            }
+            s => s,
+        };
+
+        Ok(ret)
+    };
+
+    schema
+        .traverse(&mut intersect_one, TraverseOrder::BottomUp)
+        .unwrap()
+}
+
+pub fn drop_duplicates(schema: Schema) -> Schema {
+    fn drop_one(schema: Schema) -> Result<Schema, Infallible> {
+        let ret = match schema {
+            Schema::AnyOf(vec) => {
+                let mut vec = dedup(vec.into_iter());
+                vec.sort();
+                Schema::AnyOf(vec)
+            }
+            Schema::AllOf(vec) => {
+                let mut vec = dedup(vec.into_iter());
+                vec.sort();
+                Schema::AllOf(vec)
+            }
+            s => s,
+        };
+        Ok(ret)
+    }
+
+    schema
+        .traverse(&mut drop_one, TraverseOrder::BottomUp)
+        .unwrap()
 }
 
 #[cfg(test)]
