@@ -55,59 +55,6 @@ pub enum Schema {
     Not(Box<Schema>),
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd, Ord, Eq)]
-pub enum SchemaOrder<'a> {
-    Always,
-    Never,
-    Null,
-    Boolean,
-    Const,
-    Enum,
-    Object,
-    String,
-    Number,
-    Array,
-    Ref(&'a str),
-    AnyOf(&'a [Schema]),
-    OneOf(&'a [Schema]),
-    AllOf(&'a [Schema]),
-    Ite,
-    Not(&'a Schema),
-}
-
-impl Ord for Schema {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        fn order(s: &Schema) -> SchemaOrder<'_> {
-            match s {
-                Schema::Always => SchemaOrder::Always,
-                Schema::Never => SchemaOrder::Never,
-                Schema::Null => SchemaOrder::Null,
-                Schema::Boolean => SchemaOrder::Boolean,
-                Schema::Const(_) => SchemaOrder::Const,
-                Schema::Enum(_) => SchemaOrder::Enum,
-                Schema::Object(_) => SchemaOrder::Object,
-                Schema::String(_) => SchemaOrder::String,
-                Schema::Number(_) => SchemaOrder::Number,
-                Schema::Array(_) => SchemaOrder::Array,
-                Schema::Ref(s) => SchemaOrder::Ref(s.as_str()),
-                Schema::AnyOf(vec) => SchemaOrder::AnyOf(vec),
-                Schema::OneOf(vec) => SchemaOrder::OneOf(vec),
-                Schema::AllOf(vec) => SchemaOrder::AllOf(vec),
-                Schema::Ite { .. } => SchemaOrder::Ite,
-                Schema::Not(schema) => SchemaOrder::Not(schema),
-            }
-        }
-
-        order(self).cmp(&order(other))
-    }
-}
-
-impl PartialOrd for Schema {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
 impl Schema {
     pub fn simple_type(&self, refs: &BTreeMap<String, Schema>) -> Option<InstanceType> {
         fn simple_type_rec<'s>(
@@ -158,6 +105,43 @@ impl Schema {
             Schema::String(Str::Any) => Some(InstanceType::String),
             Schema::Number(Num::Any) => Some(InstanceType::Number),
             _ => None,
+        }
+    }
+
+    pub fn just_type_set(&self) -> Option<InstanceTypeSet> {
+        if let Some(ty) = self.just_type() {
+            Some(InstanceTypeSet::singleton(ty))
+        } else if let Schema::AnyOf(schemas) = self {
+            schemas.iter().map(|s| s.just_type()).collect()
+        } else {
+            None
+        }
+    }
+
+    pub fn allowed_types_shallow(&self) -> InstanceTypeSet {
+        match self {
+            Schema::Always => InstanceTypeSet::FULL,
+            Schema::Never => InstanceTypeSet::EMPTY,
+            Schema::Null => InstanceTypeSet::singleton(InstanceType::Null),
+            Schema::Boolean => InstanceTypeSet::singleton(InstanceType::Boolean),
+            Schema::Const(_) => InstanceTypeSet::FULL, // TODO: type "inference"
+            Schema::Enum(_) => InstanceTypeSet::FULL,  // TODO: type "inference"
+            Schema::Object(_) => InstanceTypeSet::singleton(InstanceType::Object),
+            Schema::String(_) => InstanceTypeSet::singleton(InstanceType::String),
+            Schema::Number(_) => InstanceTypeSet::singleton(InstanceType::Number),
+            Schema::Array(_) => InstanceTypeSet::singleton(InstanceType::Array),
+            Schema::Ref(_) => InstanceTypeSet::FULL,
+            Schema::AnyOf(vec) => {
+                let refs = BTreeMap::new();
+                vec.iter()
+                    .map(|s| s.simple_type(&refs))
+                    .collect::<Option<InstanceTypeSet>>()
+                    .unwrap_or(InstanceTypeSet::FULL)
+            }
+            Schema::OneOf(_) => InstanceTypeSet::FULL,
+            Schema::AllOf(_) => InstanceTypeSet::FULL,
+            Schema::Ite { .. } => InstanceTypeSet::FULL,
+            Schema::Not(_) => InstanceTypeSet::FULL,
         }
     }
 }
@@ -224,8 +208,9 @@ pub enum Arr {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
 pub enum InstanceType {
-    Null,
+    Null = 0,
     Boolean,
     Object,
     Array,
@@ -234,11 +219,20 @@ pub enum InstanceType {
 }
 
 impl InstanceType {
-    fn all() -> HashSet<Self> {
+    pub fn all() -> [InstanceType; 6] {
         use InstanceType::*;
         [Null, Boolean, Object, Array, Number, String]
-            .into_iter()
-            .collect()
+    }
+
+    pub fn to_schema(self) -> Schema {
+        match self {
+            InstanceType::Null => Schema::Null,
+            InstanceType::Boolean => Schema::Boolean,
+            InstanceType::Object => Schema::Object(Obj::Any),
+            InstanceType::Array => Schema::Array(Arr::Any),
+            InstanceType::Number => Schema::Number(Num::Any),
+            InstanceType::String => Schema::String(Str::Any),
+        }
     }
 }
 
@@ -257,6 +251,59 @@ impl FromStr for InstanceType {
             s => miette::bail!("unknown instance type `{s}`"),
         };
         Ok(ty)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct InstanceTypeSet {
+    inner: u8,
+}
+
+impl InstanceTypeSet {
+    const FULL: InstanceTypeSet = InstanceTypeSet { inner: 0b0011_1111 };
+    const EMPTY: InstanceTypeSet = InstanceTypeSet { inner: 0b0000_0000 };
+
+    pub fn singleton(ty: InstanceType) -> Self {
+        Self {
+            inner: 1 << ty as u8,
+        }
+    }
+
+    pub fn insert(&mut self, ty: InstanceType) {
+        self.inner |= 1 << ty as u8;
+    }
+
+    pub fn contains(self, ty: InstanceType) -> bool {
+        self.inner & (1 << ty as u8) != 0
+    }
+
+    pub fn intersect(self, other: InstanceTypeSet) -> InstanceTypeSet {
+        InstanceTypeSet {
+            inner: self.inner & other.inner,
+        }
+    }
+
+    pub fn to_schema(self) -> Schema {
+        let types: Vec<_> = InstanceType::all()
+            .into_iter()
+            .filter(|ty| self.contains(*ty))
+            .collect();
+
+        match types.as_slice() {
+            [] => Schema::Never,
+            [ty] => ty.to_schema(),
+            _ => Schema::AnyOf(types.into_iter().map(InstanceType::to_schema).collect()),
+        }
+    }
+}
+
+impl FromIterator<InstanceType> for InstanceTypeSet {
+    fn from_iter<T: IntoIterator<Item = InstanceType>>(iter: T) -> Self {
+        let mut ret = InstanceTypeSet::EMPTY;
+        for ty in iter.into_iter() {
+            ret.insert(ty);
+        }
+        ret
     }
 }
 
@@ -1029,7 +1076,6 @@ pub fn simplify(mut schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
         schema = flatten_logical_ops(schema);
         schema = one_to_any(schema, refs);
         schema = intersect_types(schema, refs);
-        schema = drop_duplicates(schema);
 
         if schema == prev {
             return schema;
@@ -1068,36 +1114,34 @@ pub fn intersect_types(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schem
             Schema::AllOf(mut vec) => {
                 // The set of allowed types is the intersection, over all elements of `vec`,
                 // of that schema's set of allowed types.
-                let mut allowed_types = InstanceType::all();
+                let mut allowed_types = InstanceTypeSet::FULL;
 
                 for s in &vec {
-                    if let Some(ty) = s.simple_type(refs) {
-                        allowed_types.retain(|allowed| *allowed == ty);
-                    } else if let Schema::AnyOf(any_of) = &s {
-                        if let Some(any_of_tys) = any_of
-                            .iter()
-                            .map(|s| s.simple_type(refs))
-                            .collect::<Option<HashSet<InstanceType>>>()
-                        {
-                            allowed_types =
-                                allowed_types.intersection(&any_of_tys).copied().collect();
-                        }
-                    }
+                    allowed_types = allowed_types.intersect(s.allowed_types_shallow());
                 }
 
-                for s in &mut vec {
-                    if let Some(ty) = s.simple_type(refs) {
-                        if !allowed_types.contains(&ty) {
-                            return Ok(Schema::Never);
-                        }
-                    }
-
-                    if let Schema::AnyOf(any_of) = s {
-                        any_of.retain(|s| {
+                vec.retain_mut(|s| {
+                    if s.just_type_set().is_some() {
+                        // We filter out all the elements that are just type restrictions, since
+                        // there could be repeats. Then we'll add back in one if necessary.
+                        false
+                    } else if let Schema::AnyOf(schemas) = s {
+                        schemas.retain(|s| {
                             s.simple_type(refs)
-                                .is_none_or(|ty| allowed_types.contains(&ty))
+                                .is_none_or(|ty| allowed_types.contains(ty))
                         });
+                        true
+                    } else {
+                        s.simple_type(refs)
+                            .is_none_or(|ty| allowed_types.contains(ty))
                     }
+                });
+
+                if !vec
+                    .iter()
+                    .any(|s| s.allowed_types_shallow() == allowed_types)
+                {
+                    vec.push(allowed_types.to_schema());
                 }
 
                 Schema::AllOf(vec)
@@ -1110,29 +1154,6 @@ pub fn intersect_types(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schem
 
     schema
         .traverse(&mut intersect_one, TraverseOrder::BottomUp)
-        .unwrap()
-}
-
-pub fn drop_duplicates(schema: Schema) -> Schema {
-    fn drop_one(schema: Schema) -> Result<Schema, Infallible> {
-        let ret = match schema {
-            Schema::AnyOf(vec) => {
-                let mut vec = dedup(vec.into_iter());
-                vec.sort();
-                Schema::AnyOf(vec)
-            }
-            Schema::AllOf(vec) => {
-                let mut vec = dedup(vec.into_iter());
-                vec.sort();
-                Schema::AllOf(vec)
-            }
-            s => s,
-        };
-        Ok(ret)
-    }
-
-    schema
-        .traverse(&mut drop_one, TraverseOrder::BottomUp)
         .unwrap()
 }
 
