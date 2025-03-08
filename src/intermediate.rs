@@ -14,7 +14,7 @@ use nickel_lang_core::{
         record::{Field, FieldMetadata, RecordAttrs, RecordData},
         LabeledType, Rational, RichTerm, Term, TypeAnnotation,
     },
-    typ::{EnumRowF, EnumRows, EnumRowsF, RecordRows, Type, TypeF},
+    typ::{DictTypeFlavour, EnumRowF, EnumRows, EnumRowsF, RecordRows, Type, TypeF},
 };
 use ordered_float::NotNan;
 use serde::Serialize;
@@ -334,34 +334,32 @@ impl Obj {
                 type_fields: Box::new(TypeF::Dyn.into()),
                 flavour: nickel_lang_core::typ::DictTypeFlavour::Contract,
             })],
-            Obj::Properties(op) => {
-                vec![op.to_special_contract(eager, refs).unwrap_or_else(|| {
-                    let f = if eager {
-                        lib_access(["records", "eager", "record"])
-                    } else {
-                        lib_access(["records", "record"])
-                    };
-                    let additional_allowed =
-                        !matches!(op.additional_properties.as_deref(), Some(Schema::Never));
-                    let additional_contract = match op.additional_properties.as_deref() {
-                        Some(s) => sequence(s.to_contract(eager, refs)),
-                        None => type_contract(TypeF::Dyn),
-                    };
-                    mk_app!(
-                        f,
-                        Term::Record(RecordData::with_field_values(op.properties.iter().map(
-                            |(k, v)| (k.into(), sequence(v.schema.to_contract(eager, refs)))
-                        ))),
-                        Term::Record(RecordData::with_field_values(
-                            op.pattern_properties
-                                .iter()
-                                .map(|(k, v)| (k.into(), sequence(v.to_contract(eager, refs))))
-                        )),
-                        Term::Bool(additional_allowed),
-                        additional_contract
-                    )
-                })]
-            }
+            Obj::Properties(op) => op.to_special_contract(eager, refs).unwrap_or_else(|| {
+                let f = if eager {
+                    lib_access(["records", "eager", "record"])
+                } else {
+                    lib_access(["records", "record"])
+                };
+                let additional_allowed =
+                    !matches!(op.additional_properties.as_deref(), Some(Schema::Never));
+                let additional_contract = match op.additional_properties.as_deref() {
+                    Some(s) => sequence(s.to_contract(eager, refs)),
+                    None => type_contract(TypeF::Dyn),
+                };
+                vec![mk_app!(
+                    f,
+                    Term::Record(RecordData::with_field_values(op.properties.iter().map(
+                        |(k, v)| (k.into(), sequence(v.schema.to_contract(eager, refs)))
+                    ))),
+                    Term::Record(RecordData::with_field_values(
+                        op.pattern_properties
+                            .iter()
+                            .map(|(k, v)| (k.into(), sequence(v.to_contract(eager, refs))))
+                    )),
+                    Term::Bool(additional_allowed),
+                    additional_contract
+                )]
+            }),
             Obj::MaxProperties(n) => {
                 vec![mk_app!(
                     lib_access(["object", "max_properties"]),
@@ -423,16 +421,19 @@ impl ObjectProperties {
         &self,
         eager: bool,
         refs: &BTreeMap<String, Schema>,
-    ) -> Option<RichTerm> {
+    ) -> Option<Vec<RichTerm>> {
         let trivial_additional = matches!(
             self.additional_properties.as_deref(),
             None | Some(Schema::Always) | Some(Schema::Never)
         );
+        let no_additional = self.additional_properties.as_deref() == Some(&Schema::Never);
         let trivial_properties = self.properties.values().all(|p| p.schema == Schema::Always);
         if self.pattern_properties.is_empty()
             && trivial_additional
             && (!eager || trivial_properties)
         {
+            // A normal record contract, which may or may not be open. If all the element contracts
+            // are trivial, this will even be an eager contract.
             let open = matches!(
                 self.additional_properties.as_deref(),
                 None | Some(Schema::Always)
@@ -464,21 +465,61 @@ impl ObjectProperties {
                 )
             });
 
-            Some(
-                Term::Record(RecordData {
-                    fields: fields.collect(),
-                    attrs: RecordAttrs {
-                        open,
-                        ..Default::default()
-                    },
+            Some(vec![Term::Record(RecordData {
+                fields: fields.collect(),
+                attrs: RecordAttrs {
+                    open,
                     ..Default::default()
-                })
-                .into(),
-            )
+                },
+                ..Default::default()
+            })
+            .into()])
+        } else if self.properties.is_empty()
+            && self.pattern_properties.is_empty()
+            && (!eager || trivial_additional)
+        {
+            // No properties were specified, just a contract on the additional
+            // properties. We mostly treat this as a dict, but if additional
+            // properties are forbidden we treat it as an empty record.
+            if no_additional {
+                Some(vec![Term::Record(RecordData::default()).into()])
+            } else {
+                let additional_properties = self
+                    .additional_properties
+                    .as_deref()
+                    .unwrap_or(&Schema::Always);
+                Some(vec![dict_contract(additional_properties, eager, refs)])
+            }
+        } else if self.properties.is_empty()
+            && self.pattern_properties.len() == 1
+            && no_additional
+            && (!eager
+                || self
+                    .pattern_properties
+                    .values()
+                    .all(|s| s == &Schema::Always))
+        {
+            // unwrap: we checked for length 1
+            let (pattern, schema) = self.pattern_properties.iter().next().unwrap();
+            let dict = dict_contract(schema, eager, refs);
+            let names = mk_app!(
+                static_access("std", ["record", "FieldsMatch"]),
+                Term::Str(pattern.to_owned().into())
+            );
+            Some(vec![dict, names])
         } else {
             None
         }
     }
+}
+
+fn dict_contract(elt_schema: &Schema, eager: bool, refs: &BTreeMap<String, Schema>) -> RichTerm {
+    let elt_contract = elt_schema.to_contract(eager, refs);
+
+    type_contract(TypeF::Dict {
+        type_fields: Box::new(TypeF::Contract(sequence(elt_contract)).into()),
+        flavour: DictTypeFlavour::Contract,
+    })
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
@@ -498,10 +539,17 @@ pub enum Str {
 impl Str {
     pub fn to_contract(&self) -> RichTerm {
         match self {
-            Str::Any => todo!(),
-            Str::MaxLength(_) => todo!(),
-            Str::MinLength(_) => todo!(),
-            Str::Pattern(_) => todo!(),
+            Str::Any => type_contract(TypeF::String),
+            Str::MaxLength(n) => {
+                mk_app!(lib_access(["string", "maxLength"]), Term::Num((*n).into()))
+            }
+            Str::MinLength(n) => {
+                mk_app!(lib_access(["string", "minLength"]), Term::Num((*n).into()))
+            }
+            Str::Pattern(s) => mk_app!(
+                static_access("std", ["string", "Matches"]),
+                Term::Str(s.to_owned().into())
+            ),
         }
     }
 }
@@ -1592,7 +1640,7 @@ mod tests {
         let schema = simplify(schema, &refs);
         dbg!(&schema);
 
-        let rt = dbg!(schema.to_contract(false, &refs));
+        let rt = schema.to_contract(false, &refs);
         let pretty_alloc = Allocator::default();
         let out = sequence(rt).pretty(&pretty_alloc);
         out.render(80, &mut stdout()).unwrap();
