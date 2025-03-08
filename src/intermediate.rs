@@ -1,3 +1,9 @@
+// TODO:
+// - add docs to record fields
+// - fix definitions, and support collecting/writing them
+// - simpler enum contract
+// - transform pass for enumerating simple regexes
+
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     convert::Infallible,
@@ -6,11 +12,12 @@ use std::{
 
 use miette::miette;
 use nickel_lang_core::{
-    identifier::Ident,
+    identifier::{Ident, LocIdent},
     label::Label,
     mk_app,
     term::{
         array::ArrayAttrs,
+        make,
         record::{Field, FieldMetadata, RecordAttrs, RecordData},
         LabeledType, Rational, RichTerm, Term, TypeAnnotation,
     },
@@ -164,7 +171,13 @@ impl Schema {
                 }
                 Schema::AnyOf(_) => None,
                 Schema::OneOf(_) => None,
-                Schema::AllOf(_) => None,
+                Schema::AllOf(schemas) => {
+                    let mut intersection = InstanceTypeSet::FULL;
+                    for s in schemas {
+                        intersection = intersection.intersect(s.allowed_types_shallow(refs));
+                    }
+                    intersection.to_singleton()
+                }
                 Schema::Ite { els, .. } => els.simple_type(refs),
                 Schema::Not(_) => None,
             }
@@ -196,7 +209,7 @@ impl Schema {
         }
     }
 
-    pub fn allowed_types_shallow(&self) -> InstanceTypeSet {
+    pub fn allowed_types_shallow(&self, refs: &BTreeMap<String, Schema>) -> InstanceTypeSet {
         match self {
             Schema::Always => InstanceTypeSet::FULL,
             Schema::Never => InstanceTypeSet::EMPTY,
@@ -208,14 +221,15 @@ impl Schema {
             Schema::String(_) => InstanceTypeSet::singleton(InstanceType::String),
             Schema::Number(_) => InstanceTypeSet::singleton(InstanceType::Number),
             Schema::Array(_) => InstanceTypeSet::singleton(InstanceType::Array),
-            Schema::Ref(_) => InstanceTypeSet::FULL,
-            Schema::AnyOf(vec) => {
-                let refs = BTreeMap::new();
-                vec.iter()
-                    .map(|s| s.simple_type(&refs))
-                    .collect::<Option<InstanceTypeSet>>()
-                    .unwrap_or(InstanceTypeSet::FULL)
-            }
+            Schema::Ref(name) => refs
+                .get(name)
+                .map(|s| s.allowed_types_shallow(refs))
+                .unwrap_or(InstanceTypeSet::FULL),
+            Schema::AnyOf(vec) => vec
+                .iter()
+                .map(|s| s.simple_type(refs))
+                .collect::<Option<InstanceTypeSet>>()
+                .unwrap_or(InstanceTypeSet::FULL),
             Schema::OneOf(_) => InstanceTypeSet::FULL,
             Schema::AllOf(_) => InstanceTypeSet::FULL,
             Schema::Ite { .. } => InstanceTypeSet::FULL,
@@ -268,7 +282,11 @@ impl Schema {
             Schema::String(s) => vec![s.to_contract()],
             Schema::Number(num) => vec![num.to_contract()],
             Schema::Array(arr) => vec![arr.to_contract(eager, refs)],
-            Schema::Ref(s) => vec![static_access("definitions", [s.as_str()])],
+            Schema::Ref(s) => {
+                // FIXME: improve this. For a start, it doesn't need to point at "definitions"
+                // Also, this needs to know eager vs not eager
+                vec![static_access("definitions", [s.as_str()])]
+            }
             Schema::AnyOf(vec) => {
                 vec![if eager || !eagerly_disjoint(vec.iter(), refs) {
                     let contracts = vec
@@ -304,7 +322,13 @@ impl Schema {
                 .iter()
                 .flat_map(|s| s.to_contract(eager, refs))
                 .collect(),
-            Schema::Ite { iph, then, els } => todo!(),
+            Schema::Ite { iph, then, els } => {
+                // The "if" contract always needs to be checked eagerly.
+                let iph = sequence(iph.to_contract(true, refs));
+                let then = sequence(then.to_contract(eager, refs));
+                let els = sequence(els.to_contract(eager, refs));
+                vec![mk_app!(lib_access(["if_then_else"]), iph, then, els)]
+            }
             Schema::Not(schema) => {
                 vec![mk_app!(
                     static_access("std", ["contract", "not"]),
@@ -387,7 +411,28 @@ impl Obj {
                     sequence(schema.to_contract(eager, refs))
                 )]
             }
-            Obj::Dependencies(btree_map) => todo!(),
+            Obj::Dependencies(deps) => {
+                vec![mk_app!(
+                    lib_access(["records", "dependencies"]),
+                    Term::Record(RecordData::with_field_values(deps.iter().map(
+                        |(key, value)| (
+                            LocIdent::from(key),
+                            match value {
+                                Dependency::Array(fields) => {
+                                    Term::Array(
+                                        fields.iter().map(make::string).collect(),
+                                        Default::default(),
+                                    )
+                                    .into()
+                                }
+                                Dependency::Schema(schema) => {
+                                    sequence(schema.to_contract(eager, refs))
+                                }
+                            }
+                        )
+                    )))
+                )]
+            }
         }
     }
 }
@@ -604,7 +649,47 @@ pub enum Arr {
 
 impl Arr {
     pub fn to_contract(&self, eager: bool, refs: &BTreeMap<String, Schema>) -> RichTerm {
-        todo!()
+        match self {
+            Arr::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
+            Arr::AllItems(schema) => {
+                if eager {
+                    mk_app!(
+                        lib_access(["arrays", "eager", "Array"]),
+                        sequence(schema.to_contract(true, refs))
+                    )
+                } else {
+                    type_contract(TypeF::Array(Box::new(
+                        TypeF::Contract(sequence(schema.to_contract(eager, refs))).into(),
+                    )))
+                }
+            }
+            Arr::PerItem { initial, rest } => {
+                let f = if eager {
+                    lib_access(["arrays", "eager", "Items"])
+                } else {
+                    lib_access(["arrays", "Items"])
+                };
+
+                let initial = initial.iter().map(|s| sequence(s.to_contract(eager, refs)));
+                let rest = sequence(rest.to_contract(eager, refs));
+                mk_app!(
+                    f,
+                    Term::Array(initial.collect(), ArrayAttrs::default()),
+                    rest
+                )
+            }
+            Arr::MaxItems(n) => {
+                mk_app!(lib_access(["arrays", "max_items"]), Term::Num((*n).into()))
+            }
+            Arr::MinItems(n) => {
+                mk_app!(lib_access(["arrays", "min_items"]), Term::Num((*n).into()))
+            }
+            Arr::UniqueItems => lib_access(["arrays", "UniqueItems"]),
+            Arr::Contains(schema) => {
+                let contract = sequence(schema.to_contract(true, refs));
+                mk_app!(lib_access(["arrays", "Contains"]), contract)
+            }
+        }
     }
 }
 
@@ -694,6 +779,17 @@ impl InstanceTypeSet {
             [] => Schema::Never,
             [ty] => ty.to_schema(),
             _ => Schema::AnyOf(types.into_iter().map(InstanceType::to_schema).collect()),
+        }
+    }
+
+    pub fn to_singleton(self) -> Option<InstanceType> {
+        if self.inner.count_ones() == 1 {
+            InstanceType::all()
+                .iter()
+                .find(|ty| self.contains(**ty))
+                .copied()
+        } else {
+            None
         }
     }
 }
@@ -1572,7 +1668,7 @@ pub fn intersect_types(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schem
                 let mut allowed_types = InstanceTypeSet::FULL;
 
                 for s in &vec {
-                    allowed_types = allowed_types.intersect(s.allowed_types_shallow());
+                    allowed_types = allowed_types.intersect(s.allowed_types_shallow(refs));
                 }
 
                 vec.retain_mut(|s| {
@@ -1594,7 +1690,7 @@ pub fn intersect_types(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schem
 
                 if !vec
                     .iter()
-                    .any(|s| s.allowed_types_shallow() == allowed_types)
+                    .any(|s| s.allowed_types_shallow(refs) == allowed_types)
                 {
                     vec.push(allowed_types.to_schema());
                 }
@@ -1622,14 +1718,15 @@ mod tests {
 
     #[test]
     fn hack() {
-        // let data =
-        //     std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
-        let data = std::fs::read_to_string("examples/simple-schema/test.schema.json").unwrap();
+        let data =
+            std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
+        //let data = std::fs::read_to_string("examples/simple-schema/test.schema.json").unwrap();
+        //let data = std::fs::read_to_string("test.json").unwrap();
         let val: serde_json::Value = serde_json::from_str(&data).unwrap();
         let schema: super::Schema = (&val).try_into().unwrap();
-        dbg!(&schema);
+        //dbg!(&schema);
         let (schema, refs) = resolve_references(&val, schema);
-        dbg!(&refs);
+        //dbg!(&refs);
 
         let refs = refs
             .iter()
