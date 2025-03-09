@@ -234,6 +234,41 @@ impl Schema {
         }
     }
 
+    // TODO: may be worth memoizing something
+    pub fn allowed_types(&self, refs: &BTreeMap<String, Schema>) -> InstanceTypeSet {
+        match self {
+            Schema::Always => InstanceTypeSet::FULL,
+            Schema::Never => InstanceTypeSet::EMPTY,
+            Schema::Null => InstanceTypeSet::singleton(InstanceType::Null),
+            Schema::Boolean => InstanceTypeSet::singleton(InstanceType::Boolean),
+            Schema::Const(v) => InstanceTypeSet::singleton(apparent_type(v)),
+            Schema::Enum(vs) => apparent_types(vs),
+            Schema::Object(_) => InstanceTypeSet::singleton(InstanceType::Object),
+            Schema::String(_) => InstanceTypeSet::singleton(InstanceType::String),
+            Schema::Number(_) => InstanceTypeSet::singleton(InstanceType::Number),
+            Schema::Array(_) => InstanceTypeSet::singleton(InstanceType::Array),
+            Schema::Ref(name) => refs
+                .get(name)
+                .map(|s| s.allowed_types(refs))
+                .unwrap_or(InstanceTypeSet::FULL),
+            Schema::AnyOf(vec) => vec
+                .iter()
+                .map(|s| s.simple_type(refs))
+                .collect::<Option<InstanceTypeSet>>()
+                .unwrap_or(InstanceTypeSet::FULL),
+            Schema::OneOf(_) => InstanceTypeSet::FULL,
+            Schema::AllOf(vec) => {
+                let mut intersection = InstanceTypeSet::FULL;
+                for s in vec {
+                    intersection = intersection.intersect(s.allowed_types(refs));
+                }
+                intersection
+            }
+            Schema::Ite { .. } => InstanceTypeSet::FULL,
+            Schema::Not(_) => InstanceTypeSet::FULL,
+        }
+    }
+
     pub fn to_contract(&self, eager: bool, refs: &BTreeMap<String, Schema>) -> Vec<RichTerm> {
         match self {
             Schema::Always => vec![lib_access(["Always"])],
@@ -1689,7 +1724,7 @@ pub fn intersect_types(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schem
                 let mut allowed_types = InstanceTypeSet::FULL;
 
                 for s in &vec {
-                    allowed_types = allowed_types.intersect(s.allowed_types_shallow(refs));
+                    allowed_types = allowed_types.intersect(s.allowed_types(refs));
                 }
 
                 vec.retain_mut(|s| {
@@ -1825,8 +1860,7 @@ pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schem
         };
 
         for (s, schema) in &props.pattern_properties {
-            dbg!(&s);
-            let expanded = dbg!(enumerate_regex(s, max_expansion))?;
+            let expanded = enumerate_regex(s, max_expansion)?;
             for name in expanded {
                 if new_props
                     .properties
@@ -1870,10 +1904,10 @@ mod tests {
 
     #[test]
     fn hack() {
-        // let data =
-        //     std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
+        let data =
+            std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
         //let data = std::fs::read_to_string("examples/simple-schema/test.schema.json").unwrap();
-        let data = std::fs::read_to_string("test.json").unwrap();
+        //let data = std::fs::read_to_string("test.json").unwrap();
         let val: serde_json::Value = serde_json::from_str(&data).unwrap();
         let schema: super::Schema = (&val).try_into().unwrap();
         //dbg!(&schema);
@@ -1884,10 +1918,10 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.clone(), simplify(v.clone(), &refs)))
             .collect();
-        dbg!(&refs);
+        //dbg!(&refs);
         let schema = inline_refs(schema, &refs);
         let schema = simplify(schema, &refs);
-        dbg!(&schema);
+        //dbg!(&schema);
 
         let rt = schema.to_contract(false, &refs);
         let pretty_alloc = Allocator::default();
