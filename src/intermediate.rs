@@ -1,8 +1,10 @@
 // TODO:
 // - fix definitions, and support collecting/writing them
+// - more comprehensive recursive-definition-avoidance
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     convert::Infallible,
     str::FromStr,
 };
@@ -72,10 +74,7 @@ fn sequence(mut contracts: Vec<RichTerm>) -> RichTerm {
     }
 }
 
-fn eagerly_disjoint<'a>(
-    schemas: impl Iterator<Item = &'a Schema>,
-    refs: &BTreeMap<String, Schema>,
-) -> bool {
+fn eagerly_disjoint<'a>(schemas: impl Iterator<Item = &'a Schema>, refs: &dyn References) -> bool {
     let mut seen_types = InstanceTypeSet::EMPTY;
 
     for s in schemas {
@@ -132,10 +131,10 @@ fn apparent_types<'a>(values: impl IntoIterator<Item = &'a Value>) -> InstanceTy
 }
 
 impl Schema {
-    pub fn simple_type(&self, refs: &BTreeMap<String, Schema>) -> Option<InstanceType> {
+    pub fn simple_type(&self, refs: &dyn References) -> Option<InstanceType> {
         fn simple_type_rec<'s>(
             slf: &'s Schema,
-            refs: &'s BTreeMap<String, Schema>,
+            refs: &'s dyn References,
             // Keeps track of the references we've followed to get to the current schema,
             // as protection against infinite recursion.
             followed: &mut HashSet<&'s str>,
@@ -159,7 +158,9 @@ impl Schema {
                 Schema::Array(_) => Some(InstanceType::Array),
                 Schema::Ref(r) => {
                     if followed.insert(r) {
-                        let ret = refs.get(r).and_then(|s| simple_type_rec(s, refs, followed));
+                        let ret = refs
+                            .get_ref(r)
+                            .and_then(|s| simple_type_rec(s, refs, followed));
                         followed.remove(r.as_str());
                         ret
                     } else {
@@ -206,7 +207,7 @@ impl Schema {
         }
     }
 
-    pub fn allowed_types_shallow(&self, refs: &BTreeMap<String, Schema>) -> InstanceTypeSet {
+    pub fn allowed_types_shallow(&self, refs: &dyn References) -> InstanceTypeSet {
         match self {
             Schema::Always => InstanceTypeSet::FULL,
             Schema::Never => InstanceTypeSet::EMPTY,
@@ -219,7 +220,7 @@ impl Schema {
             Schema::Number(_) => InstanceTypeSet::singleton(InstanceType::Number),
             Schema::Array(_) => InstanceTypeSet::singleton(InstanceType::Array),
             Schema::Ref(name) => refs
-                .get(name)
+                .get_ref(name)
                 .map(|s| s.allowed_types_shallow(refs))
                 .unwrap_or(InstanceTypeSet::FULL),
             Schema::AnyOf(vec) => vec
@@ -235,7 +236,7 @@ impl Schema {
     }
 
     // TODO: may be worth memoizing something
-    pub fn allowed_types(&self, refs: &BTreeMap<String, Schema>) -> InstanceTypeSet {
+    pub fn allowed_types(&self, refs: &dyn References) -> InstanceTypeSet {
         match self {
             Schema::Always => InstanceTypeSet::FULL,
             Schema::Never => InstanceTypeSet::EMPTY,
@@ -248,7 +249,7 @@ impl Schema {
             Schema::Number(_) => InstanceTypeSet::singleton(InstanceType::Number),
             Schema::Array(_) => InstanceTypeSet::singleton(InstanceType::Array),
             Schema::Ref(name) => refs
-                .get(name)
+                .get_ref(name)
                 .map(|s| s.allowed_types(refs))
                 .unwrap_or(InstanceTypeSet::FULL),
             Schema::AnyOf(vec) => vec
@@ -269,7 +270,7 @@ impl Schema {
         }
     }
 
-    pub fn to_contract(&self, eager: bool, refs: &BTreeMap<String, Schema>) -> Vec<RichTerm> {
+    pub fn to_contract(&self, eager: bool, refs: &dyn References) -> Vec<RichTerm> {
         match self {
             Schema::Always => vec![lib_access(["Always"])],
             Schema::Never => vec![lib_access(["Never"])],
@@ -376,6 +377,59 @@ impl Schema {
             }
         }
     }
+
+    pub fn is_always_eager(&self, refs: &BTreeMap<String, Schema>) -> bool {
+        match self {
+            Schema::Always
+            | Schema::Never
+            | Schema::Null
+            | Schema::Boolean
+            | Schema::Const(_)
+            | Schema::Enum(_)
+            | Schema::String(_)
+            | Schema::Number(_) => true,
+            Schema::Ref(r) => refs.get(r).is_none_or(|s| s.is_always_eager(refs)),
+            Schema::Object(obj) => match obj {
+                Obj::Any
+                | Obj::MaxProperties(_)
+                | Obj::MinProperties(_)
+                | Obj::Required(_)
+                | Obj::PropertyNames(_) => true,
+                Obj::Properties(props) => {
+                    props
+                        .properties
+                        .values()
+                        .all(|p| p.schema.is_always_eager(refs))
+                        && props
+                            .pattern_properties
+                            .values()
+                            .all(|s| s.is_always_eager(refs))
+                        && props
+                            .additional_properties
+                            .as_ref()
+                            .is_none_or(|s| s.is_always_eager(refs))
+                }
+                Obj::Dependencies(deps) => deps.values().all(|d| match d {
+                    Dependency::Array(_) => true,
+                    Dependency::Schema(schema) => schema.is_always_eager(refs),
+                }),
+            },
+            Schema::Array(arr) => match arr {
+                Arr::Any | Arr::MaxItems(_) | Arr::MinItems(_) | Arr::UniqueItems => true,
+                Arr::AllItems(schema) | Arr::Contains(schema) => schema.is_always_eager(refs),
+                Arr::PerItem { initial, rest } => {
+                    initial.iter().all(|s| s.is_always_eager(refs)) && rest.is_always_eager(refs)
+                }
+            },
+            Schema::AnyOf(vec) | Schema::OneOf(vec) | Schema::AllOf(vec) => {
+                vec.iter().all(|s| s.is_always_eager(refs))
+            }
+            Schema::Ite { iph, then, els } => {
+                iph.is_always_eager(refs) && then.is_always_eager(refs) && els.is_always_eager(refs)
+            }
+            Schema::Not(schema) => schema.is_always_eager(refs),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
@@ -391,7 +445,7 @@ pub enum Obj {
 }
 
 impl Obj {
-    pub fn to_contract(&self, eager: bool, refs: &BTreeMap<String, Schema>) -> Vec<RichTerm> {
+    pub fn to_contract(&self, eager: bool, refs: &dyn References) -> Vec<RichTerm> {
         match self {
             Obj::Any => vec![type_contract(TypeF::Dict {
                 type_fields: Box::new(TypeF::Dyn.into()),
@@ -501,11 +555,7 @@ pub struct ObjectProperties {
 }
 
 impl ObjectProperties {
-    pub fn to_special_contract(
-        &self,
-        eager: bool,
-        refs: &BTreeMap<String, Schema>,
-    ) -> Option<Vec<RichTerm>> {
+    pub fn to_special_contract(&self, eager: bool, refs: &dyn References) -> Option<Vec<RichTerm>> {
         let trivial_additional = matches!(
             self.additional_properties.as_deref(),
             None | Some(Schema::Always) | Some(Schema::Never)
@@ -597,7 +647,7 @@ impl ObjectProperties {
     }
 }
 
-fn dict_contract(elt_schema: &Schema, eager: bool, refs: &BTreeMap<String, Schema>) -> RichTerm {
+fn dict_contract(elt_schema: &Schema, eager: bool, refs: &dyn References) -> RichTerm {
     let elt_contract = elt_schema.to_contract(eager, refs);
 
     type_contract(TypeF::Dict {
@@ -687,7 +737,7 @@ pub enum Arr {
 }
 
 impl Arr {
-    pub fn to_contract(&self, eager: bool, refs: &BTreeMap<String, Schema>) -> RichTerm {
+    pub fn to_contract(&self, eager: bool, refs: &dyn References) -> RichTerm {
         match self {
             Arr::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
             Arr::AllItems(schema) => {
@@ -1892,6 +1942,69 @@ pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schem
     schema
         .traverse(&mut enumerate_one, TraverseOrder::BottomUp)
         .unwrap()
+}
+
+pub trait References {
+    fn get_ref(&self, name: &str) -> Option<&Schema> {
+        self.get_ref_maybe_eager(name, false)
+    }
+
+    fn get_ref_maybe_eager(&self, name: &str, eager: bool) -> Option<&Schema>;
+}
+
+impl References for BTreeMap<String, Schema> {
+    fn get_ref_maybe_eager(&self, name: &str, _eager: bool) -> Option<&Schema> {
+        self.get(name)
+    }
+}
+
+struct TracingReferences<'a> {
+    inner: &'a BTreeMap<String, Schema>,
+    always_eager: BTreeMap<&'a str, bool>,
+    followed: RefCell<BTreeMap<&'a str, bool>>,
+}
+
+impl<'a> TracingReferences<'a> {
+    fn new(inner: &'a BTreeMap<String, Schema>) -> Self {
+        let always_eager = inner
+            .iter()
+            .map(|(name, schema)| (name.as_str(), schema.is_always_eager(inner)))
+            .collect();
+
+        Self {
+            inner,
+            always_eager,
+            followed: RefCell::new(BTreeMap::new()),
+        }
+    }
+}
+
+impl References for TracingReferences<'_> {
+    fn get_ref_maybe_eager(&self, name: &str, eager: bool) -> Option<&Schema> {
+        self.inner.get_key_value(name).map(|(stored_name, schema)| {
+            let eager = eager && self.always_eager.get(name) != Some(&true);
+            self.followed.borrow_mut().insert(stored_name, eager);
+            schema
+        })
+    }
+}
+
+fn is_name_ever_shadowed(s: Schema, name: &str) -> (Schema, bool) {
+    let mut ret = false;
+    let mut shadowed = |s: Schema| -> Result<Schema, Infallible> {
+        if let Schema::Object(Obj::Properties(props)) = &s {
+            ret |= props.properties.contains_key(name);
+        }
+        Ok(s)
+    };
+
+    let s = s.traverse(&mut shadowed, TraverseOrder::BottomUp).unwrap();
+    (s, ret)
+}
+
+pub fn to_nickel(s: &Schema, refs: &BTreeMap<String, Schema>) -> RichTerm {
+    let tracing_refs = TracingReferences::new(refs);
+    todo!()
 }
 
 #[cfg(test)]
