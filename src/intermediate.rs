@@ -1,8 +1,5 @@
 // TODO:
-// - add docs to record fields
 // - fix definitions, and support collecting/writing them
-// - simpler enum contract
-// - transform pass for enumerating simple regexes
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -274,8 +271,15 @@ impl Schema {
                         type_contract(TypeF::Enum(enum_rows)),
                     ]
                 } else {
-                    Schema::AnyOf(vec.iter().map(|v| Schema::Const(v.clone())).collect())
-                        .to_contract(eager, refs)
+                    vec![mk_app!(
+                        lib_access(["enum"]),
+                        Term::Array(
+                            vec.iter()
+                                .map(|val| serde_json::from_value(val.clone()).unwrap())
+                                .collect(),
+                            ArrayAttrs::default()
+                        )
+                    )]
                 }
             }
             Schema::Object(obj) => obj.to_contract(eager, refs),
@@ -502,7 +506,7 @@ impl ObjectProperties {
                                     .collect(),
                             },
                             opt: prop.optional,
-                            doc: prop.doc.clone(), // TODO: fill out the doc
+                            doc: prop.doc.clone(),
                             ..Default::default()
                         },
                         ..Default::default()
@@ -819,6 +823,10 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
         let obj = value
             .as_object()
             .ok_or_else(|| miette!("schema must be an object"))?;
+
+        if obj.is_empty() {
+            return Ok(Schema::Always);
+        }
 
         let mut num_schemas = Vec::new();
         let types = match obj.get("type") {
@@ -1160,7 +1168,19 @@ fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
     if let Some(props) = get_object(obj, "properties")? {
         properties.properties = props
             .iter()
-            .map(|(k, v)| Ok((k.to_owned(), Schema::try_from(v)?.into())))
+            .map(|(k, v)| {
+                let schema = Schema::try_from(v)?;
+                let mut prop = Property::from(schema);
+
+                if let Some(doc) = v
+                    .as_object()
+                    .and_then(|obj| obj.get("description"))
+                    .and_then(|desc| desc.as_str())
+                {
+                    prop.doc = Some(doc.to_owned());
+                }
+                Ok((k.to_owned(), prop))
+            })
             .collect::<miette::Result<_>>()?;
     };
     if let Some(pats) = get_object(obj, "patternProperties")? {
@@ -1582,6 +1602,7 @@ pub fn simplify(mut schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
         schema = one_to_any(schema, refs);
         schema = intersect_types(schema, refs);
         schema = merge_required_properties(schema);
+        schema = enumerate_regex_properties(schema, 8);
 
         if schema == prev {
             return schema;
@@ -1708,6 +1729,137 @@ pub fn intersect_types(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schem
         .unwrap()
 }
 
+fn enumerate_regex(s: &str, max_expansion: usize) -> Option<Vec<String>> {
+    use regex_syntax::hir::{Hir, HirKind, Look};
+    // TODO: maybe we should signal an error (probably while constructing the schema) if
+    // there's a regex we can't parse?
+    let hir = regex_syntax::parse(s).ok()?.into_kind();
+
+    // We're only interested in anchored regexes (starting with ^, ending with $), so
+    // check that that's the case. Then strip the anchors in preparation for recursion.
+    let HirKind::Concat(mut elems) = hir else {
+        return None;
+    };
+    let Some(HirKind::Look(Look::Start)) = elems.first().map(|h| h.kind()) else {
+        return None;
+    };
+
+    let Some(HirKind::Look(Look::End)) = elems.last().map(|h| h.kind()) else {
+        return None;
+    };
+    elems.remove(0);
+    elems.pop();
+    let hir = Hir::concat(elems);
+
+    fn enumerate_rec(hir: regex_syntax::hir::Hir, max_expansion: usize) -> Option<Vec<String>> {
+        match hir.into_kind() {
+            HirKind::Empty => Some(vec![String::new()]),
+            HirKind::Literal(literal) => Some(vec![String::from_utf8(literal.0.to_vec()).ok()?]),
+            HirKind::Class(_) | HirKind::Look(_) => None,
+            HirKind::Repetition(repetition) => {
+                let max = repetition.max? as usize;
+                let min = repetition.min as usize;
+                let inner = enumerate_rec(*repetition.sub, max_expansion)?;
+                if inner.len().checked_mul(max - min)? <= max_expansion {
+                    let mut ret = Vec::new();
+                    for i in min..=max {
+                        for s in &inner {
+                            ret.push(s.repeat(i));
+                        }
+                    }
+                    Some(ret)
+                } else {
+                    None
+                }
+            }
+            HirKind::Capture(capture) => enumerate_rec(*capture.sub, max_expansion),
+            HirKind::Concat(vec) => {
+                let mut options = vec![String::new()];
+                for sub in vec {
+                    let sub_options = enumerate_rec(sub, max_expansion)?;
+                    if sub_options.len() * options.len() > max_expansion {
+                        return None;
+                    }
+
+                    options = options
+                        .iter()
+                        .flat_map(|prev| {
+                            sub_options.iter().map(|next| {
+                                let mut new = prev.to_owned();
+                                new.push_str(next);
+                                new
+                            })
+                        })
+                        .collect();
+                }
+
+                Some(options)
+            }
+            HirKind::Alternation(vec) => {
+                let mut options = Vec::new();
+                for sub in vec {
+                    options.extend(enumerate_rec(sub, max_expansion - options.len())?);
+                    if options.len() > max_expansion {
+                        return None;
+                    }
+                }
+                Some(options)
+            }
+        }
+    }
+
+    let mut ret = enumerate_rec(hir, max_expansion)?;
+    ret.sort();
+    Some(ret)
+}
+
+pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schema {
+    fn try_expand_props(
+        props: &ObjectProperties,
+        max_expansion: usize,
+    ) -> Option<ObjectProperties> {
+        let mut new_props = ObjectProperties {
+            properties: props.properties.clone(),
+            pattern_properties: BTreeMap::new(),
+            additional_properties: props.additional_properties.clone(),
+        };
+
+        for (s, schema) in &props.pattern_properties {
+            dbg!(&s);
+            let expanded = dbg!(enumerate_regex(s, max_expansion))?;
+            for name in expanded {
+                if new_props
+                    .properties
+                    .insert(name, schema.clone().into())
+                    .is_some()
+                {
+                    // Abort if there's any overlap between properties (either between
+                    // existing properties and regex properties, or between multiple
+                    // regex properties). In principle, I think it's also ok to combine
+                    // overlaps using allOf.
+                    return None;
+                }
+            }
+        }
+
+        Some(new_props)
+    }
+
+    let mut enumerate_one = |schema: Schema| -> Result<Schema, Infallible> {
+        let ret = match schema {
+            Schema::Object(Obj::Properties(props)) => Schema::Object(Obj::Properties(
+                try_expand_props(&props, max_expansion).unwrap_or(props),
+            )),
+            s => s,
+        };
+        Ok(ret)
+    };
+
+    schema
+        .traverse(&mut enumerate_one, TraverseOrder::BottomUp)
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::stdout;
@@ -1718,10 +1870,10 @@ mod tests {
 
     #[test]
     fn hack() {
-        let data =
-            std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
+        // let data =
+        //     std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
         //let data = std::fs::read_to_string("examples/simple-schema/test.schema.json").unwrap();
-        //let data = std::fs::read_to_string("test.json").unwrap();
+        let data = std::fs::read_to_string("test.json").unwrap();
         let val: serde_json::Value = serde_json::from_str(&data).unwrap();
         let schema: super::Schema = (&val).try_into().unwrap();
         //dbg!(&schema);
@@ -1741,5 +1893,25 @@ mod tests {
         let pretty_alloc = Allocator::default();
         let out = sequence(rt).pretty(&pretty_alloc);
         out.render(80, &mut stdout()).unwrap();
+    }
+
+    #[test]
+    fn regex_expansion() {
+        assert_eq!(
+            enumerate_regex("^foo|bar$", 2),
+            Some(vec!["bar".to_owned(), "^foo$".to_owned()])
+        );
+
+        assert_eq!(enumerate_regex("^foo|bar$", 1), None);
+
+        assert_eq!(
+            enumerate_regex("^(foo|bar)s?$", 4),
+            Some(vec![
+                "bar".to_owned(),
+                "bars".to_owned(),
+                "foo".to_owned(),
+                "foos".to_owned()
+            ])
+        );
     }
 }
