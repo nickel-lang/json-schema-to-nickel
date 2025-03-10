@@ -8,7 +8,7 @@ use std::{
 use clap::Parser;
 use json_schema_to_nickel::{
     inline_lib,
-    intermediate::{self, inline_refs, simplify},
+    intermediate::{self, inline_refs, simplify, References},
 };
 use nickel_lang_core::pretty::*;
 use terminal_size::{terminal_size, Width};
@@ -42,11 +42,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let val: serde_json::Value = serde_json::from_reader(f)?;
     let schema: intermediate::Schema = (&val).try_into().unwrap();
-    let (schema, refs) = intermediate::resolve_references_recursive(&val, schema);
-    let refs = refs
+    let (schema, all_refs) = intermediate::resolve_references_recursive(&val, schema);
+    let refs = References::new(&all_refs);
+    let simple_refs = all_refs
         .iter()
         .map(|(k, v)| (k.clone(), simplify(v.clone(), &refs)))
         .collect();
+    let refs = References::new(&simple_refs);
     let schema = inline_refs(schema, &refs);
     let schema = simplify(schema, &refs);
 

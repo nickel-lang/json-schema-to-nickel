@@ -1,6 +1,3 @@
-// TODO:
-// - remove unneccessary "always"
-
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -74,7 +71,7 @@ fn sequence(mut contracts: Vec<RichTerm>) -> RichTerm {
     }
 }
 
-fn eagerly_disjoint<'a>(schemas: impl Iterator<Item = &'a Schema>, refs: &dyn References) -> bool {
+fn eagerly_disjoint<'a>(schemas: impl Iterator<Item = &'a Schema>, refs: &References) -> bool {
     let mut seen_types = InstanceTypeSet::EMPTY;
 
     for s in schemas {
@@ -131,14 +128,8 @@ fn apparent_types<'a>(values: impl IntoIterator<Item = &'a Value>) -> InstanceTy
 }
 
 impl Schema {
-    pub fn simple_type(&self, refs: &dyn References) -> Option<InstanceType> {
-        fn simple_type_rec<'s>(
-            slf: &'s Schema,
-            refs: &'s dyn References,
-            // Keeps track of the references we've followed to get to the current schema,
-            // as protection against infinite recursion.
-            followed: &mut HashSet<&'s str>,
-        ) -> Option<InstanceType> {
+    pub fn simple_type(&self, refs: &References) -> Option<InstanceType> {
+        fn simple_type_rec<'s>(slf: &'s Schema, refs: &'s References) -> Option<InstanceType> {
             match slf {
                 Schema::Always => None,
                 Schema::Never => None,
@@ -156,17 +147,7 @@ impl Schema {
                 Schema::String(_) => Some(InstanceType::String),
                 Schema::Number(_) => Some(InstanceType::Number),
                 Schema::Array(_) => Some(InstanceType::Array),
-                Schema::Ref(r) => {
-                    if followed.insert(r) {
-                        let ret = refs
-                            .get_ref(r)
-                            .and_then(|s| simple_type_rec(s, refs, followed));
-                        followed.remove(r.as_str());
-                        ret
-                    } else {
-                        None
-                    }
-                }
+                Schema::Ref(r) => refs.get(r).and_then(|s| simple_type_rec(&s, refs)),
                 Schema::AnyOf(_) => None,
                 Schema::OneOf(_) => None,
                 Schema::AllOf(schemas) => {
@@ -181,8 +162,7 @@ impl Schema {
             }
         }
 
-        let mut followed = HashSet::new();
-        simple_type_rec(self, refs, &mut followed)
+        simple_type_rec(self, refs)
     }
 
     pub fn just_type(&self) -> Option<InstanceType> {
@@ -207,7 +187,7 @@ impl Schema {
         }
     }
 
-    pub fn allowed_types_shallow(&self, refs: &dyn References) -> InstanceTypeSet {
+    pub fn allowed_types_shallow(&self, refs: &References) -> InstanceTypeSet {
         match self {
             Schema::Always => InstanceTypeSet::FULL,
             Schema::Never => InstanceTypeSet::EMPTY,
@@ -220,7 +200,7 @@ impl Schema {
             Schema::Number(_) => InstanceTypeSet::singleton(InstanceType::Number),
             Schema::Array(_) => InstanceTypeSet::singleton(InstanceType::Array),
             Schema::Ref(name) => refs
-                .get_ref(name)
+                .get(name)
                 .map(|s| s.allowed_types_shallow(refs))
                 .unwrap_or(InstanceTypeSet::FULL),
             Schema::AnyOf(vec) => vec
@@ -236,7 +216,7 @@ impl Schema {
     }
 
     // TODO: may be worth memoizing something
-    pub fn allowed_types(&self, refs: &dyn References) -> InstanceTypeSet {
+    pub fn allowed_types(&self, refs: &References) -> InstanceTypeSet {
         match self {
             Schema::Always => InstanceTypeSet::FULL,
             Schema::Never => InstanceTypeSet::EMPTY,
@@ -249,7 +229,7 @@ impl Schema {
             Schema::Number(_) => InstanceTypeSet::singleton(InstanceType::Number),
             Schema::Array(_) => InstanceTypeSet::singleton(InstanceType::Array),
             Schema::Ref(name) => refs
-                .get_ref(name)
+                .get(name)
                 .map(|s| s.allowed_types(refs))
                 .unwrap_or(InstanceTypeSet::FULL),
             Schema::AnyOf(vec) => vec
@@ -319,7 +299,7 @@ impl Schema {
             Schema::String(s) => vec![s.to_contract(ctx)],
             Schema::Number(num) => vec![num.to_contract(ctx)],
             Schema::Array(arr) => vec![arr.to_contract(ctx)],
-            Schema::Ref(s) => vec![ctx.ref_term(dbg!(s))],
+            Schema::Ref(s) => vec![ctx.ref_term(s)],
             Schema::AnyOf(vec) => {
                 vec![if ctx.eager || !eagerly_disjoint(vec.iter(), ctx.refs) {
                     let contracts = vec
@@ -368,7 +348,7 @@ impl Schema {
         }
     }
 
-    pub fn is_always_eager(&self, refs: &BTreeMap<String, Schema>) -> bool {
+    pub fn is_always_eager(&self, refs: &References) -> bool {
         match self {
             Schema::Always
             | Schema::Never
@@ -1670,8 +1650,8 @@ pub fn flatten_logical_ops(schema: Schema) -> Schema {
         .unwrap()
 }
 
-pub fn one_to_any(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
-    fn distinct_types(s: &[Schema], refs: &BTreeMap<String, Schema>) -> bool {
+pub fn one_to_any(schema: Schema, refs: &References) -> Schema {
+    fn distinct_types(s: &[Schema], refs: &References) -> bool {
         let simple_types = s
             .iter()
             .map(|s| s.simple_type(refs))
@@ -1693,7 +1673,7 @@ pub fn one_to_any(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
         .unwrap()
 }
 
-pub fn simplify(mut schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
+pub fn simplify(mut schema: Schema, refs: &References) -> Schema {
     loop {
         let prev = schema.clone();
         schema = flatten_logical_ops(schema);
@@ -1708,10 +1688,10 @@ pub fn simplify(mut schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
     }
 }
 
-pub fn inline_refs(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
+pub fn inline_refs(schema: Schema, refs: &References) -> Schema {
     let mut inline_one = |schema: Schema| -> Result<Schema, Infallible> {
         let ret = match schema {
-            Schema::Ref(s) => match refs.get(&s) {
+            Schema::Ref(s) => match refs.get(&s).as_deref() {
                 // The ref-inlining heuristic could use some work. We probably
                 // want to avoid inlining large schemas, and we probably want to
                 // prioritize inlining things that can lead to further simplication.
@@ -1720,7 +1700,7 @@ pub fn inline_refs(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
                 {
                     resolved.clone()
                 }
-                Some(_) => Schema::Ref(s),
+                Some(_) => Schema::Ref(s.clone()),
                 None => Schema::Always,
             },
             s => s,
@@ -1778,7 +1758,7 @@ pub fn merge_required_properties(schema: Schema) -> Schema {
         .unwrap()
 }
 
-pub fn intersect_types(schema: Schema, refs: &BTreeMap<String, Schema>) -> Schema {
+pub fn intersect_types(schema: Schema, refs: &References) -> Schema {
     let mut intersect_one = |schema: Schema| -> Result<Schema, Infallible> {
         let ret = match schema {
             Schema::AllOf(mut vec) => {
@@ -1957,17 +1937,52 @@ pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schem
         .unwrap()
 }
 
-pub trait References {
-    fn get_ref(&self, name: &str) -> Option<&Schema> {
-        self.get_ref_maybe_eager(name, false)
-    }
-
-    fn get_ref_maybe_eager(&self, name: &str, eager: bool) -> Option<&Schema>;
+pub struct RefGuard<'b, 'a: 'b> {
+    refs: &'b References<'a>,
+    name: &'b str,
+    schema: &'b Schema,
 }
 
-impl References for BTreeMap<String, Schema> {
-    fn get_ref_maybe_eager(&self, name: &str, _eager: bool) -> Option<&Schema> {
-        self.get(name)
+impl<'b, 'a: 'b> Drop for RefGuard<'b, 'a> {
+    fn drop(&mut self) {
+        self.refs.blackholed.borrow_mut().remove(self.name);
+    }
+}
+
+impl<'b, 'a: 'b> std::ops::Deref for RefGuard<'b, 'a> {
+    type Target = Schema;
+
+    fn deref(&self) -> &Self::Target {
+        self.schema
+    }
+}
+
+pub struct References<'a> {
+    inner: &'a BTreeMap<String, Schema>,
+    blackholed: RefCell<HashSet<&'a str>>,
+}
+
+impl<'a> References<'a> {
+    pub fn new(inner: &'a BTreeMap<String, Schema>) -> Self {
+        References {
+            inner,
+            blackholed: RefCell::new(HashSet::new()),
+        }
+    }
+
+    fn get<'b>(&'b self, name: &'b str) -> Option<RefGuard<'b, 'a>> {
+        if self.blackholed.borrow().contains(name) {
+            None
+        } else {
+            self.inner.get_key_value(name).map(|(stored_name, s)| {
+                self.blackholed.borrow_mut().insert(stored_name);
+                RefGuard {
+                    refs: self,
+                    name,
+                    schema: s,
+                }
+            })
+        }
     }
 }
 
@@ -2006,8 +2021,8 @@ fn all_ref_names(s: Schema) -> (Schema, HashSet<String>) {
 }
 
 #[derive(Clone, Copy)]
-pub struct ContractContext<'a> {
-    refs: &'a dyn References,
+pub struct ContractContext<'a, 'refs> {
+    refs: &'a References<'refs>,
     lib_name: &'a str,
     refs_name: &'a str,
     eager: bool,
@@ -2015,7 +2030,7 @@ pub struct ContractContext<'a> {
     accessed_refs: &'a RefCell<BTreeSet<(String, bool)>>,
 }
 
-impl ContractContext<'_> {
+impl ContractContext<'_, '_> {
     pub fn js2n(&self, path: &str) -> RichTerm {
         static_access(self.lib_name, path.split('.'))
     }
@@ -2041,7 +2056,7 @@ impl ContractContext<'_> {
         // FIXME: once we convert to the new ast, make this an actual nested access
         let names: Vec<_> = self.ref_name(name, eager).collect();
 
-        if self.refs.get_ref(name).is_some() {
+        if self.refs.get(name).is_some() {
             self.accessed_refs
                 .borrow_mut()
                 .insert((name.to_owned(), eager));
@@ -2067,10 +2082,10 @@ impl ContractContext<'_> {
     }
 }
 
-pub fn to_nickel(s: Schema, refs: &BTreeMap<String, Schema>, import_term: RichTerm) -> RichTerm {
-    dbg!(&refs.keys().collect::<Vec<_>>());
+pub fn to_nickel(s: Schema, refs: &References, import_term: RichTerm) -> RichTerm {
     let (s, mut all_refs) = all_ref_names(s);
 
+    // TODO: maybe this is redundant now that we collect refs recursively
     let mut unfollowed_refs = all_refs.clone();
     let (s, mut shadowed_names) = all_shadowed_names(s);
 
@@ -2093,6 +2108,7 @@ pub fn to_nickel(s: Schema, refs: &BTreeMap<String, Schema>, import_term: RichTe
     let lib_name = no_collisions_name(&shadowed_names, "js2n");
 
     let always_eager = refs
+        .inner
         .iter()
         .map(|(name, schema)| (name.as_str(), schema.is_always_eager(refs)))
         .collect();
@@ -2112,16 +2128,17 @@ pub fn to_nickel(s: Schema, refs: &BTreeMap<String, Schema>, import_term: RichTe
     let mut refs_env = BTreeMap::new();
     let mut unfollowed_refs = accessed.clone();
     while !unfollowed_refs.is_empty() {
-        dbg!(&unfollowed_refs);
         for (name, eager) in unfollowed_refs {
             // FIXME: once we convert to the new ast, make this an actual nested access
             let names: Vec<_> = ctx.ref_name(&name, eager).collect();
             // unwrap: the context shouldn't collect missing references
-            refs_env.insert(names.join("."), sequence(refs[&name].to_contract(ctx)));
+            refs_env.insert(
+                names.join("."),
+                sequence(refs.inner[&name].to_contract(ctx)),
+            );
         }
 
         let newly_accessed = std::mem::take(ctx.accessed_refs.borrow_mut().deref_mut());
-        dbg!(&newly_accessed);
         unfollowed_refs = newly_accessed.difference(&accessed).cloned().collect();
         accessed.extend(newly_accessed);
     }
@@ -2159,12 +2176,21 @@ mod tests {
         let schema: super::Schema = (&val).try_into().unwrap();
         //dbg!(&schema);
         let (schema, refs) = resolve_references(&val, schema);
+        let refs = References {
+            inner: &refs,
+            blackholed: RefCell::new(HashSet::new()),
+        };
         //dbg!(&refs);
 
-        let refs = refs
+        let simplified_refs = refs
+            .inner
             .iter()
             .map(|(k, v)| (k.clone(), simplify(v.clone(), &refs)))
             .collect();
+        let refs = References {
+            inner: &simplified_refs,
+            blackholed: RefCell::new(HashSet::new()),
+        };
         //dbg!(&refs);
         let schema = inline_refs(schema, &refs);
         let schema = simplify(schema, &refs);
