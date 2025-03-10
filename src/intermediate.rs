@@ -4,8 +4,9 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     convert::Infallible,
+    ops::DerefMut,
     str::FromStr,
 };
 
@@ -28,7 +29,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     references::{SchemaPointer, SchemaPointerElt},
-    utils::{distinct, lib_access, static_access},
+    utils::{distinct, static_access},
 };
 
 // See https://github.com/orgs/json-schema-org/discussions/526#discussioncomment-7559030
@@ -270,21 +271,18 @@ impl Schema {
         }
     }
 
-    pub fn to_contract(&self, eager: bool, refs: &dyn References) -> Vec<RichTerm> {
+    pub fn to_contract(&self, ctx: ContractContext) -> Vec<RichTerm> {
         match self {
-            Schema::Always => vec![lib_access(["Always"])],
-            Schema::Never => vec![lib_access(["Never"])],
-            Schema::Null => vec![lib_access(["Null"])],
+            Schema::Always => vec![ctx.js2n("Always")],
+            Schema::Never => vec![ctx.js2n("Never")],
+            Schema::Null => vec![ctx.js2n("Null")],
             Schema::Boolean => vec![type_contract(TypeF::Bool)],
             Schema::Const(val) => {
                 let nickel_val: RichTerm = serde_json::from_value(val.clone()).unwrap();
-                if eager && (val.is_object() || val.is_array()) {
-                    vec![mk_app!(lib_access(["eager", "const"]), nickel_val)]
+                if ctx.eager && (val.is_object() || val.is_array()) {
+                    vec![mk_app!(ctx.js2n("const"), nickel_val)]
                 } else {
-                    vec![mk_app!(
-                        static_access("std", ["contract", "Equal"]),
-                        nickel_val
-                    )]
+                    vec![mk_app!(ctx.std("contract.Equal"), nickel_val)]
                 }
             }
             Schema::Enum(vec) => {
@@ -303,12 +301,12 @@ impl Schema {
                         });
 
                     vec![
-                        static_access("std", ["enum", "TagOrString"]),
+                        ctx.std("enum.TagOrString"),
                         type_contract(TypeF::Enum(enum_rows)),
                     ]
                 } else {
                     vec![mk_app!(
-                        lib_access(["enum"]),
+                        ctx.js2n("enum"),
                         Term::Array(
                             vec.iter()
                                 .map(|val| serde_json::from_value(val.clone()).unwrap())
@@ -318,32 +316,28 @@ impl Schema {
                     )]
                 }
             }
-            Schema::Object(obj) => obj.to_contract(eager, refs),
-            Schema::String(s) => vec![s.to_contract()],
-            Schema::Number(num) => vec![num.to_contract()],
-            Schema::Array(arr) => vec![arr.to_contract(eager, refs)],
-            Schema::Ref(s) => {
-                // FIXME: improve this. For a start, it doesn't need to point at "definitions"
-                // Also, this needs to know eager vs not eager
-                vec![static_access("definitions", [s.as_str()])]
-            }
+            Schema::Object(obj) => obj.to_contract(ctx),
+            Schema::String(s) => vec![s.to_contract(ctx)],
+            Schema::Number(num) => vec![num.to_contract(ctx)],
+            Schema::Array(arr) => vec![arr.to_contract(ctx)],
+            Schema::Ref(s) => vec![ctx.ref_term(s)],
             Schema::AnyOf(vec) => {
-                vec![if eager || !eagerly_disjoint(vec.iter(), refs) {
+                vec![if ctx.eager || !eagerly_disjoint(vec.iter(), ctx.refs) {
                     let contracts = vec
                         .iter()
-                        .map(|s| sequence(s.to_contract(true, refs)))
+                        .map(|s| sequence(s.to_contract(ctx.eager())))
                         .collect();
                     mk_app!(
-                        lib_access(["any_of"]),
+                        ctx.js2n("any_of"),
                         Term::Array(contracts, ArrayAttrs::default())
                     )
                 } else {
                     let contracts = vec
                         .iter()
-                        .map(|s| sequence(s.to_contract(false, refs)))
+                        .map(|s| sequence(s.to_contract(ctx.lazy())))
                         .collect();
                     mk_app!(
-                        static_access("std", ["contract", "any_of"]),
+                        ctx.std("contract.any_of"),
                         Term::Array(contracts, ArrayAttrs::default())
                     )
                 }]
@@ -351,28 +345,25 @@ impl Schema {
             Schema::OneOf(vec) => {
                 let contracts = vec
                     .iter()
-                    .map(|s| sequence(s.to_contract(true, refs)))
+                    .map(|s| sequence(s.to_contract(ctx.eager())))
                     .collect();
                 vec![mk_app!(
-                    lib_access(["one_of"]),
+                    ctx.js2n("one_of"),
                     Term::Array(contracts, ArrayAttrs::default())
                 )]
             }
-            Schema::AllOf(vec) => vec
-                .iter()
-                .flat_map(|s| s.to_contract(eager, refs))
-                .collect(),
+            Schema::AllOf(vec) => vec.iter().flat_map(|s| s.to_contract(ctx)).collect(),
             Schema::Ite { iph, then, els } => {
                 // The "if" contract always needs to be checked eagerly.
-                let iph = sequence(iph.to_contract(true, refs));
-                let then = sequence(then.to_contract(eager, refs));
-                let els = sequence(els.to_contract(eager, refs));
-                vec![mk_app!(lib_access(["if_then_else"]), iph, then, els)]
+                let iph = sequence(iph.to_contract(ctx.eager()));
+                let then = sequence(then.to_contract(ctx));
+                let els = sequence(els.to_contract(ctx));
+                vec![mk_app!(ctx.js2n("if_then_else"), iph, then, els)]
             }
             Schema::Not(schema) => {
                 vec![mk_app!(
-                    static_access("std", ["contract", "not"]),
-                    sequence(schema.to_contract(eager, refs))
+                    ctx.std("contract.not"),
+                    sequence(schema.to_contract(ctx))
                 )]
             }
         }
@@ -445,33 +436,35 @@ pub enum Obj {
 }
 
 impl Obj {
-    pub fn to_contract(&self, eager: bool, refs: &dyn References) -> Vec<RichTerm> {
+    pub fn to_contract(&self, ctx: ContractContext) -> Vec<RichTerm> {
         match self {
             Obj::Any => vec![type_contract(TypeF::Dict {
                 type_fields: Box::new(TypeF::Dyn.into()),
                 flavour: nickel_lang_core::typ::DictTypeFlavour::Contract,
             })],
-            Obj::Properties(op) => op.to_special_contract(eager, refs).unwrap_or_else(|| {
-                let f = if eager {
-                    lib_access(["records", "eager", "record"])
+            Obj::Properties(op) => op.to_special_contract(ctx).unwrap_or_else(|| {
+                let f = if ctx.eager {
+                    ctx.js2n("records.eager.record")
                 } else {
-                    lib_access(["records", "record"])
+                    ctx.js2n("records.record")
                 };
                 let additional_allowed =
                     !matches!(op.additional_properties.as_deref(), Some(Schema::Never));
                 let additional_contract = match op.additional_properties.as_deref() {
-                    Some(s) => sequence(s.to_contract(eager, refs)),
+                    Some(s) => sequence(s.to_contract(ctx)),
                     None => type_contract(TypeF::Dyn),
                 };
                 vec![mk_app!(
                     f,
-                    Term::Record(RecordData::with_field_values(op.properties.iter().map(
-                        |(k, v)| (k.into(), sequence(v.schema.to_contract(eager, refs)))
-                    ))),
+                    Term::Record(RecordData::with_field_values(
+                        op.properties
+                            .iter()
+                            .map(|(k, v)| (k.into(), sequence(v.schema.to_contract(ctx))))
+                    )),
                     Term::Record(RecordData::with_field_values(
                         op.pattern_properties
                             .iter()
-                            .map(|(k, v)| (k.into(), sequence(v.to_contract(eager, refs))))
+                            .map(|(k, v)| (k.into(), sequence(v.to_contract(ctx))))
                     )),
                     Term::Bool(additional_allowed),
                     additional_contract
@@ -479,19 +472,19 @@ impl Obj {
             }),
             Obj::MaxProperties(n) => {
                 vec![mk_app!(
-                    lib_access(["object", "max_properties"]),
+                    ctx.js2n("object.max_properties"),
                     Term::Num((*n).into())
                 )]
             }
             Obj::MinProperties(n) => {
                 vec![mk_app!(
-                    lib_access(["object", "min_properties"]),
+                    ctx.js2n("object.min_properties"),
                     Term::Num((*n).into())
                 )]
             }
             Obj::Required(names) => {
                 vec![mk_app!(
-                    lib_access(["object", "required"]),
+                    ctx.js2n("object.required"),
                     Term::Array(
                         names.iter().map(|s| Term::Str(s.into()).into()).collect(),
                         ArrayAttrs::default()
@@ -500,13 +493,13 @@ impl Obj {
             }
             Obj::PropertyNames(schema) => {
                 vec![mk_app!(
-                    lib_access(["object", "property_names"]),
-                    sequence(schema.to_contract(eager, refs))
+                    ctx.js2n("object.property_names"),
+                    sequence(schema.to_contract(ctx))
                 )]
             }
             Obj::Dependencies(deps) => {
                 vec![mk_app!(
-                    lib_access(["records", "dependencies"]),
+                    ctx.js2n("records.dependencies"),
                     Term::Record(RecordData::with_field_values(deps.iter().map(
                         |(key, value)| (
                             LocIdent::from(key),
@@ -519,7 +512,7 @@ impl Obj {
                                     .into()
                                 }
                                 Dependency::Schema(schema) => {
-                                    sequence(schema.to_contract(eager, refs))
+                                    sequence(schema.to_contract(ctx))
                                 }
                             }
                         )
@@ -555,7 +548,7 @@ pub struct ObjectProperties {
 }
 
 impl ObjectProperties {
-    pub fn to_special_contract(&self, eager: bool, refs: &dyn References) -> Option<Vec<RichTerm>> {
+    pub fn to_special_contract(&self, ctx: ContractContext) -> Option<Vec<RichTerm>> {
         let trivial_additional = matches!(
             self.additional_properties.as_deref(),
             None | Some(Schema::Always) | Some(Schema::Never)
@@ -564,7 +557,7 @@ impl ObjectProperties {
         let trivial_properties = self.properties.values().all(|p| p.schema == Schema::Always);
         if self.pattern_properties.is_empty()
             && trivial_additional
-            && (!eager || trivial_properties)
+            && (!ctx.eager || trivial_properties)
         {
             // A normal record contract, which may or may not be open. If all the element contracts
             // are trivial, this will even be an eager contract.
@@ -582,7 +575,7 @@ impl ObjectProperties {
                                 typ: None,
                                 contracts: prop
                                     .schema
-                                    .to_contract(eager, refs)
+                                    .to_contract(ctx)
                                     .into_iter()
                                     .map(|c| LabeledType {
                                         typ: TypeF::Contract(c).into(),
@@ -610,7 +603,7 @@ impl ObjectProperties {
             .into()])
         } else if self.properties.is_empty()
             && self.pattern_properties.is_empty()
-            && (!eager || trivial_additional)
+            && (!ctx.eager || trivial_additional)
         {
             // No properties were specified, just a contract on the additional
             // properties. We mostly treat this as a dict, but if additional
@@ -622,12 +615,12 @@ impl ObjectProperties {
                     .additional_properties
                     .as_deref()
                     .unwrap_or(&Schema::Always);
-                Some(vec![dict_contract(additional_properties, eager, refs)])
+                Some(vec![dict_contract(additional_properties, ctx)])
             }
         } else if self.properties.is_empty()
             && self.pattern_properties.len() == 1
             && no_additional
-            && (!eager
+            && (!ctx.eager
                 || self
                     .pattern_properties
                     .values()
@@ -635,9 +628,9 @@ impl ObjectProperties {
         {
             // unwrap: we checked for length 1
             let (pattern, schema) = self.pattern_properties.iter().next().unwrap();
-            let dict = dict_contract(schema, eager, refs);
+            let dict = dict_contract(schema, ctx);
             let names = mk_app!(
-                static_access("std", ["record", "FieldsMatch"]),
+                ctx.std("record.FieldsMatch"),
                 Term::Str(pattern.to_owned().into())
             );
             Some(vec![dict, names])
@@ -647,8 +640,8 @@ impl ObjectProperties {
     }
 }
 
-fn dict_contract(elt_schema: &Schema, eager: bool, refs: &dyn References) -> RichTerm {
-    let elt_contract = elt_schema.to_contract(eager, refs);
+fn dict_contract(elt_schema: &Schema, ctx: ContractContext) -> RichTerm {
+    let elt_contract = elt_schema.to_contract(ctx);
 
     type_contract(TypeF::Dict {
         type_fields: Box::new(TypeF::Contract(sequence(elt_contract)).into()),
@@ -671,19 +664,16 @@ pub enum Str {
 }
 
 impl Str {
-    pub fn to_contract(&self) -> RichTerm {
+    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
         match self {
             Str::Any => type_contract(TypeF::String),
             Str::MaxLength(n) => {
-                mk_app!(lib_access(["string", "maxLength"]), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("string.maxLength"), Term::Num((*n).into()))
             }
             Str::MinLength(n) => {
-                mk_app!(lib_access(["string", "minLength"]), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("string.minLength"), Term::Num((*n).into()))
             }
-            Str::Pattern(s) => mk_app!(
-                static_access("std", ["string", "Matches"]),
-                Term::Str(s.to_owned().into())
-            ),
+            Str::Pattern(s) => mk_app!(ctx.std("string.Matches"), Term::Str(s.to_owned().into())),
         }
     }
 }
@@ -703,21 +693,21 @@ pub enum Num {
 }
 
 impl Num {
-    pub fn to_contract(&self) -> RichTerm {
+    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
         match self {
             Num::Any => type_contract(TypeF::Number),
             Num::MultipleOf(n) => {
-                mk_app!(lib_access(["number", "multipleOf"]), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("number.multipleOf"), Term::Num((*n).into()))
             }
-            Num::Maximum(x) => mk_app!(lib_access(["number", "maximum"]), num(*x)),
-            Num::Minimum(x) => mk_app!(lib_access(["number", "minimum"]), num(*x)),
+            Num::Maximum(x) => mk_app!(ctx.js2n("number.maximum"), num(*x)),
+            Num::Minimum(x) => mk_app!(ctx.js2n("number.minimum"), num(*x)),
             Num::ExclusiveMinimum(x) => {
-                mk_app!(lib_access(["number", "exclusiveMinimum"]), num(*x))
+                mk_app!(ctx.js2n("number.exclusiveMinimum"), num(*x))
             }
             Num::ExclusiveMaximum(x) => {
-                mk_app!(lib_access(["number", "exclusiveMaximum"]), num(*x))
+                mk_app!(ctx.js2n("number.exclusiveMaximum"), num(*x))
             }
-            Num::Integer => static_access("std", ["number", "Integer"]),
+            Num::Integer => ctx.std("number.Integer"),
         }
     }
 }
@@ -737,30 +727,30 @@ pub enum Arr {
 }
 
 impl Arr {
-    pub fn to_contract(&self, eager: bool, refs: &dyn References) -> RichTerm {
+    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
         match self {
             Arr::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
             Arr::AllItems(schema) => {
-                if eager {
+                if ctx.eager {
                     mk_app!(
-                        lib_access(["arrays", "eager", "Array"]),
-                        sequence(schema.to_contract(true, refs))
+                        ctx.js2n("arrays.eager.Array"),
+                        sequence(schema.to_contract(ctx))
                     )
                 } else {
                     type_contract(TypeF::Array(Box::new(
-                        TypeF::Contract(sequence(schema.to_contract(eager, refs))).into(),
+                        TypeF::Contract(sequence(schema.to_contract(ctx))).into(),
                     )))
                 }
             }
             Arr::PerItem { initial, rest } => {
-                let f = if eager {
-                    lib_access(["arrays", "eager", "Items"])
+                let f = if ctx.eager {
+                    ctx.js2n("arrays.eager.Items")
                 } else {
-                    lib_access(["arrays", "Items"])
+                    ctx.js2n("arrays.Items")
                 };
 
-                let initial = initial.iter().map(|s| sequence(s.to_contract(eager, refs)));
-                let rest = sequence(rest.to_contract(eager, refs));
+                let initial = initial.iter().map(|s| sequence(s.to_contract(ctx)));
+                let rest = sequence(rest.to_contract(ctx));
                 mk_app!(
                     f,
                     Term::Array(initial.collect(), ArrayAttrs::default()),
@@ -768,15 +758,15 @@ impl Arr {
                 )
             }
             Arr::MaxItems(n) => {
-                mk_app!(lib_access(["arrays", "max_items"]), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("arrays.MaxItems"), Term::Num((*n).into()))
             }
             Arr::MinItems(n) => {
-                mk_app!(lib_access(["arrays", "min_items"]), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("arrays.MinItems"), Term::Num((*n).into()))
             }
-            Arr::UniqueItems => lib_access(["arrays", "UniqueItems"]),
+            Arr::UniqueItems => ctx.js2n("arrays.UniqueItems"),
             Arr::Contains(schema) => {
-                let contract = sequence(schema.to_contract(true, refs));
-                mk_app!(lib_access(["arrays", "Contains"]), contract)
+                let contract = sequence(schema.to_contract(ctx.eager()));
+                mk_app!(ctx.js2n("arrays.Contains"), contract)
             }
         }
     }
@@ -1958,42 +1948,11 @@ impl References for BTreeMap<String, Schema> {
     }
 }
 
-struct TracingReferences<'a> {
-    inner: &'a BTreeMap<String, Schema>,
-    always_eager: BTreeMap<&'a str, bool>,
-    followed: RefCell<BTreeMap<&'a str, bool>>,
-}
-
-impl<'a> TracingReferences<'a> {
-    fn new(inner: &'a BTreeMap<String, Schema>) -> Self {
-        let always_eager = inner
-            .iter()
-            .map(|(name, schema)| (name.as_str(), schema.is_always_eager(inner)))
-            .collect();
-
-        Self {
-            inner,
-            always_eager,
-            followed: RefCell::new(BTreeMap::new()),
-        }
-    }
-}
-
-impl References for TracingReferences<'_> {
-    fn get_ref_maybe_eager(&self, name: &str, eager: bool) -> Option<&Schema> {
-        self.inner.get_key_value(name).map(|(stored_name, schema)| {
-            let eager = eager && self.always_eager.get(name) != Some(&true);
-            self.followed.borrow_mut().insert(stored_name, eager);
-            schema
-        })
-    }
-}
-
-fn is_name_ever_shadowed(s: Schema, name: &str) -> (Schema, bool) {
-    let mut ret = false;
+fn all_shadowed_names(s: Schema) -> (Schema, HashSet<String>) {
+    let mut ret = HashSet::new();
     let mut shadowed = |s: Schema| -> Result<Schema, Infallible> {
         if let Schema::Object(Obj::Properties(props)) = &s {
-            ret |= props.properties.contains_key(name);
+            ret.extend(props.properties.keys().cloned());
         }
         Ok(s)
     };
@@ -2002,24 +1961,173 @@ fn is_name_ever_shadowed(s: Schema, name: &str) -> (Schema, bool) {
     (s, ret)
 }
 
-pub fn to_nickel(s: &Schema, refs: &BTreeMap<String, Schema>) -> RichTerm {
-    let tracing_refs = TracingReferences::new(refs);
-    todo!()
+fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
+    let mut ret = prefix.to_owned();
+    while taken_names.contains(&ret) {
+        ret.push('_');
+    }
+    ret
+}
+
+fn all_ref_names(s: Schema) -> (Schema, HashSet<String>) {
+    let mut ret = HashSet::new();
+    let mut ref_name = |s: Schema| -> Result<Schema, Infallible> {
+        if let Schema::Ref(s) = &s {
+            ret.insert(s.clone());
+        }
+        Ok(s)
+    };
+
+    let s = s.traverse(&mut ref_name, TraverseOrder::BottomUp).unwrap();
+    (s, ret)
+}
+
+#[derive(Clone, Copy)]
+pub struct ContractContext<'a> {
+    refs: &'a dyn References,
+    lib_name: &'a str,
+    refs_name: &'a str,
+    eager: bool,
+    always_eager_refs: &'a BTreeMap<&'a str, bool>,
+    accessed_refs: &'a RefCell<BTreeSet<(String, bool)>>,
+}
+
+impl ContractContext<'_> {
+    pub fn js2n(&self, path: &str) -> RichTerm {
+        static_access(self.lib_name, path.split('.'))
+    }
+
+    pub fn std(&self, path: &str) -> RichTerm {
+        static_access("std", path.split('.'))
+    }
+
+    pub fn ref_name<'b>(
+        &'b self,
+        name: &'b str,
+        eager: bool,
+    ) -> impl DoubleEndedIterator<Item = &'b str> {
+        let trimmed_name = name.trim_start_matches(['#', '/']);
+        eager
+            .then_some("eager")
+            .into_iter()
+            .chain(trimmed_name.split('/'))
+    }
+
+    pub fn ref_term(&self, name: &str) -> RichTerm {
+        let eager = self.eager && !self.always_eager_refs.get(name).unwrap_or(&true);
+        // FIXME: once we convert to the new ast, make this an actual nested access
+        let names: Vec<_> = self.ref_name(name, eager).collect();
+
+        if self.refs.get_ref(name).is_some() {
+            self.accessed_refs
+                .borrow_mut()
+                .insert((name.to_owned(), eager));
+            static_access(self.refs_name, [names.join(".").as_str()])
+        } else {
+            // TODO: warn here, because ideally we trim missing references early on.
+            static_access(self.lib_name, ["Always"])
+        }
+    }
+
+    pub fn eager(self) -> Self {
+        Self {
+            eager: true,
+            ..self
+        }
+    }
+
+    pub fn lazy(self) -> Self {
+        Self {
+            eager: false,
+            ..self
+        }
+    }
+}
+
+pub fn to_nickel(s: Schema, refs: &BTreeMap<String, Schema>, import_term: RichTerm) -> RichTerm {
+    let (s, mut all_refs) = all_ref_names(s);
+
+    let mut unfollowed_refs = all_refs.clone();
+    let (s, mut shadowed_names) = all_shadowed_names(s);
+
+    while !unfollowed_refs.is_empty() {
+        let mut next_refs = HashSet::new();
+        for name in unfollowed_refs {
+            if let Some(schema) = refs.get(&name) {
+                let (schema, new_refs) = all_ref_names(schema.clone());
+                let (_, new_shadowed_names) = all_shadowed_names(schema);
+                next_refs.extend(new_refs);
+                shadowed_names.extend(new_shadowed_names);
+            }
+        }
+
+        unfollowed_refs = next_refs.difference(&all_refs).cloned().collect();
+        all_refs.extend(next_refs);
+    }
+
+    let refs_name = no_collisions_name(&shadowed_names, "refs");
+    let lib_name = no_collisions_name(&shadowed_names, "js2n");
+
+    let always_eager = refs
+        .iter()
+        .map(|(name, schema)| (name.as_str(), schema.is_always_eager(refs)))
+        .collect();
+    let accessed_refs = RefCell::new(BTreeSet::new());
+
+    let ctx = ContractContext {
+        refs,
+        lib_name: &lib_name,
+        refs_name: &refs_name,
+        eager: false,
+        always_eager_refs: &always_eager,
+        accessed_refs: &accessed_refs,
+    };
+    let main_contract = s.to_contract(ctx);
+
+    let mut accessed = std::mem::take(ctx.accessed_refs.borrow_mut().deref_mut());
+    let mut refs_env = BTreeMap::new();
+    let mut unfollowed_refs = accessed.clone();
+    while !unfollowed_refs.is_empty() {
+        for (name, eager) in unfollowed_refs {
+            // FIXME: once we convert to the new ast, make this an actual nested access
+            let names: Vec<_> = ctx.ref_name(&name, eager).collect();
+            // unwrap: the context shouldn't collect missing references
+            refs_env.insert(names.join("."), sequence(refs[&name].to_contract(ctx)));
+        }
+
+        let newly_accessed = std::mem::take(ctx.accessed_refs.borrow_mut().deref_mut());
+        unfollowed_refs = newly_accessed.difference(&accessed).cloned().collect();
+        accessed.extend(newly_accessed);
+    }
+
+    let refs_dict = Term::Record(RecordData {
+        fields: refs_env
+            .into_iter()
+            .map(|(name, value)| (name.into(), value.into()))
+            .collect(),
+        ..Default::default()
+    });
+
+    make::let_one_in(
+        ctx.lib_name,
+        import_term,
+        make::let_one_in(ctx.refs_name, refs_dict, sequence(main_contract)),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::stdout;
 
-    use nickel_lang_core::pretty::*;
+    use nickel_lang_core::{cache::InputFormat, pretty::*};
 
     use super::*;
 
     #[test]
     fn hack() {
-        let data =
-            std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
-        //let data = std::fs::read_to_string("examples/simple-schema/test.schema.json").unwrap();
+        // let data =
+        //     std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
+        let data = std::fs::read_to_string("examples/simple-schema/test.schema.json").unwrap();
         //let data = std::fs::read_to_string("test.json").unwrap();
         let val: serde_json::Value = serde_json::from_str(&data).unwrap();
         let schema: super::Schema = (&val).try_into().unwrap();
@@ -2036,9 +2144,14 @@ mod tests {
         let schema = simplify(schema, &refs);
         //dbg!(&schema);
 
-        let rt = schema.to_contract(false, &refs);
         let pretty_alloc = Allocator::default();
-        let out = sequence(rt).pretty(&pretty_alloc);
+        let lib_import = Term::Import {
+            path: "import-path".into(),
+            format: InputFormat::Nickel,
+        }
+        .into();
+        let rt = to_nickel(schema, &refs, lib_import);
+        let out = rt.pretty(&pretty_alloc);
         out.render(80, &mut stdout()).unwrap();
     }
 

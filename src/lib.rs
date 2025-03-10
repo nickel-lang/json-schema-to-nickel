@@ -77,6 +77,14 @@ pub fn convert(root_schema: &RootSchema, library_path: Option<OsString>) -> Rich
 /// Wrap a converted contract in the given environment and inline the predicate library in a
 /// let-binding at the top-level of the wrapped contract.
 pub fn wrap_inline_lib(env: Environment, contract: Contract) -> RichTerm {
+    let_one_in(
+        PREDICATES_LIBRARY_ID,
+        inline_lib(),
+        env.wrap(contract.into()),
+    )
+}
+
+pub fn inline_lib() -> RichTerm {
     let lib_ncl = include_bytes!(concat!(env!("OUT_DIR"), "/predicates.ncl"));
     let lib_ncl = String::from_utf8_lossy(lib_ncl);
 
@@ -87,9 +95,7 @@ pub fn wrap_inline_lib(env: Environment, contract: Contract) -> RichTerm {
         lib_ncl.to_string(),
     );
     let lexer = Lexer::new(cache.source(file_id));
-    let lib_rt = parser.parse_strict(file_id, lexer).unwrap();
-
-    let_one_in(PREDICATES_LIBRARY_ID, lib_rt, env.wrap(contract.into()))
+    parser.parse_strict(file_id, lexer).unwrap()
 }
 
 /// Import the predicate library in a let-binding at the top-level of a converted contract.

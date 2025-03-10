@@ -6,9 +6,11 @@ use std::{
 };
 
 use clap::Parser;
-use json_schema_to_nickel::{convert, transform};
+use json_schema_to_nickel::{
+    inline_lib,
+    intermediate::{self, inline_refs, simplify},
+};
 use nickel_lang_core::pretty::*;
-use schemars::schema::RootSchema;
 use terminal_size::{terminal_size, Width};
 
 #[derive(Parser)]
@@ -38,16 +40,33 @@ fn main() -> Result<(), Box<dyn Error>> {
         Box::new(std::io::stdin())
     };
 
-    let schema: RootSchema = serde_json::from_reader(f)?;
-    let schema = transform::merge_defs(schema);
-    let schema = transform::lift_any_of_types(schema);
+    let val: serde_json::Value = serde_json::from_reader(f)?;
+    let schema: intermediate::Schema = (&val).try_into().unwrap();
+    let (schema, refs) = intermediate::resolve_references(&val, schema);
+    let refs = refs
+        .iter()
+        .map(|(k, v)| (k.clone(), simplify(v.clone(), &refs)))
+        .collect();
+    let schema = inline_refs(schema, &refs);
+    let schema = simplify(schema, &refs);
+
+    let lib_term = if let Some(path) = args.library_path {
+        nickel_lang_core::term::Term::Import {
+            path,
+            format: nickel_lang_core::cache::InputFormat::Nickel,
+        }
+        .into()
+    } else {
+        inline_lib()
+    };
 
     let size = terminal_size()
         .map(|(Width(w), _)| w as usize)
         .unwrap_or(80);
 
+    let contract = intermediate::to_nickel(schema, &refs, lib_term);
     let pretty_alloc = Allocator::default();
-    let types: DocBuilder<'_, _, ()> = convert(&schema, args.library_path).pretty(&pretty_alloc);
+    let types: DocBuilder<'_, _, ()> = contract.pretty(&pretty_alloc);
 
     println!("# DO NOT EDIT\n# This file was automatically generated using json-schema-to-nickel");
     types.render(size, &mut stdout())?;
