@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let val: serde_json::Value = serde_json::from_reader(f)?;
     let schema: intermediate::Schema = (&val).try_into().unwrap();
-    let (schema, refs) = intermediate::resolve_references(&val, schema);
+    let (schema, refs) = intermediate::resolve_references_recursive(&val, schema);
     let refs = refs
         .iter()
         .map(|(k, v)| (k.clone(), simplify(v.clone(), &refs)))

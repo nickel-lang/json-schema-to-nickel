@@ -1,6 +1,5 @@
 // TODO:
-// - fix definitions, and support collecting/writing them
-// - more comprehensive recursive-definition-avoidance
+// - remove unneccessary "always"
 
 use std::{
     cell::RefCell,
@@ -320,7 +319,7 @@ impl Schema {
             Schema::String(s) => vec![s.to_contract(ctx)],
             Schema::Number(num) => vec![num.to_contract(ctx)],
             Schema::Array(arr) => vec![arr.to_contract(ctx)],
-            Schema::Ref(s) => vec![ctx.ref_term(s)],
+            Schema::Ref(s) => vec![ctx.ref_term(dbg!(s))],
             Schema::AnyOf(vec) => {
                 vec![if ctx.eager || !eagerly_disjoint(vec.iter(), ctx.refs) {
                     let contracts = vec
@@ -1517,6 +1516,30 @@ pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, BTreeMap<St
     (schema, refs)
 }
 
+pub fn resolve_references_recursive(
+    value: &Value,
+    schema: Schema,
+) -> (Schema, BTreeMap<String, Schema>) {
+    let (schema, mut refs) = resolve_references(value, schema);
+    let mut seen_refs: HashSet<_> = refs.keys().cloned().collect();
+    let mut unfollowed_refs = seen_refs.clone();
+
+    while !unfollowed_refs.is_empty() {
+        let mut next_refs = HashSet::new();
+        for name in unfollowed_refs {
+            // unwrap: refs is always a superset of unfollowed_refs
+            let (_schema, new_refs) = resolve_references(value, refs[&name].clone());
+
+            next_refs.extend(new_refs.keys().cloned());
+            refs.extend(new_refs);
+        }
+        unfollowed_refs = next_refs.difference(&seen_refs).cloned().collect();
+        seen_refs.extend(next_refs);
+    }
+
+    (schema, refs)
+}
+
 impl SchemaPointerElt {
     fn name(&self) -> &str {
         match self {
@@ -2045,6 +2068,7 @@ impl ContractContext<'_> {
 }
 
 pub fn to_nickel(s: Schema, refs: &BTreeMap<String, Schema>, import_term: RichTerm) -> RichTerm {
+    dbg!(&refs.keys().collect::<Vec<_>>());
     let (s, mut all_refs) = all_ref_names(s);
 
     let mut unfollowed_refs = all_refs.clone();
@@ -2088,6 +2112,7 @@ pub fn to_nickel(s: Schema, refs: &BTreeMap<String, Schema>, import_term: RichTe
     let mut refs_env = BTreeMap::new();
     let mut unfollowed_refs = accessed.clone();
     while !unfollowed_refs.is_empty() {
+        dbg!(&unfollowed_refs);
         for (name, eager) in unfollowed_refs {
             // FIXME: once we convert to the new ast, make this an actual nested access
             let names: Vec<_> = ctx.ref_name(&name, eager).collect();
@@ -2096,6 +2121,7 @@ pub fn to_nickel(s: Schema, refs: &BTreeMap<String, Schema>, import_term: RichTe
         }
 
         let newly_accessed = std::mem::take(ctx.accessed_refs.borrow_mut().deref_mut());
+        dbg!(&newly_accessed);
         unfollowed_refs = newly_accessed.difference(&accessed).cloned().collect();
         accessed.extend(newly_accessed);
     }
