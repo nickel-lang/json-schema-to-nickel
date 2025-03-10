@@ -1,37 +1,63 @@
-let error_lib = import "./error.ncl" in
-
 {
-  arrayOf
-    : (
-      Dyn -> [|
-        'Ok,
-        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-      |]
-    ) -> Dyn -> [|
-      'Ok,
-      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-    |]
-    | doc m%"
-      Apply a predicate to all elements of an array, succeeding if all
-      applications succeed.
+  eager = {
+    ArrayOf
+      | Dyn -> Dyn
+      | doc m%"
+      An eager version of `Array`. `value | ArrayOf C` will succeed if `value` is an array and all of
+      its elements satisfy the contract `C`.
     "%
-    = fun pred x =>
-      if !std.is_array x then
-        'Ok
-      else
-        let x = x | Array Dyn in
-        x
-        |> std.array.map_with_index (fun idx elt => { index = idx, value = elt })
-        |> std.array.fold_right
-          (fun { index, value } acc =>
-            pred value
-            |> error_lib.at_index index
-            |> match {
-              'Ok => acc,
-              error @ ('Error msg) => error,
-            }
-          )
-          'Ok,
+      = fun ctr =>
+        std.contract.from_validator (fun value =>
+          if !std.is_array value then
+            'Error { message = "expected an array" }
+          else
+            value
+            |> std.array.fold_right
+              (fun elt acc =>
+                std.contract.check ctr elt
+                |> match {
+                  'Ok _ => acc,
+                  'Error e => 'Error e
+                }
+              )
+              'Ok
+        ),
+
+    Items | Array Dyn -> Dyn -> Dyn = fun items rest =>
+      std.contract.from_validator (fun value =>
+        if !std.is_array value then
+          'Error { message = "expected an array" }
+        else
+          # This seems off to me, but it's what the json-schema spec says: it's ok if the array
+          # we're validating is shorter than the array of contracts.
+          let length_to_check = std.number.min (std.array.length items) (std.array.length value) in
+          let { left, right } = std.array.split_at length_to_check value in
+          std.array.zip_with (fun ctr x => std.contract.check ctr x) items left
+          |> std.array.fold_left
+            (fun acc =>
+              match {
+                'Ok _ => acc,
+                'Error e => 'Error e
+              }
+            )
+            'Ok
+          |> match {
+            'Error e => 'Error e,
+            'Ok =>
+              # The individual elements succeeded. If there's anything left in the array, check the `rest` contract.
+              right
+              |> std.array.fold_right
+                (fun elt acc =>
+                  std.contract.check rest elt
+                  |> match {
+                    'Ok _ => acc,
+                    'Error e => 'Error e
+                  }
+                )
+                'Ok
+          }
+      ),
+  },
 
   contains
     : (
@@ -68,105 +94,13 @@ let error_lib = import "./error.ncl" in
           ('Errors [])
         |> match {
           'Ok => 'Ok,
-          'Errors errors =>
-            'Error (error_lib.combine "contains: no elements matched" errors),
+          'Errors errors => 'Ok
+          #'Error (error_lib.combine "contains: no elements matched" errors),
         },
 
-  items
-    : Array (
-      Dyn -> [|
-        'Ok,
-        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-      |]
-    ) -> Dyn -> [|
-      'Ok,
-      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-    |]
-    | doc m%"
-      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.1]
-    "%
-    = fun preds x =>
-      if !std.is_array x then
-        'Ok
-      else
-        let x = x | Array Dyn in
-        let length_to_check = std.number.min (std.array.length preds) (std.array.length x) in
-        std.array.range 0 length_to_check
-        |> std.array.fold_right
-          (fun i acc =>
-            (std.array.at i preds) (std.array.at i x)
-            |> error_lib.at_index i
-            |> match {
-              'Ok => acc,
-              err @ ('Error msg) => err,
-            }
-          )
-          'Ok,
-
-  additionalItems
-    : (
-      Dyn -> [|
-        'Ok,
-        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-      |]
-    ) -> Number -> Dyn -> [|
-      'Ok,
-      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-    |]
-    | doc m%"
-      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.2]
-    "%
-    = fun pred start x =>
-      if !std.is_array x then
-        'Ok
-      else
-        let x = x | Array Dyn in
-        let value_length = std.array.length x in
-        if start >= value_length then
-          'Ok
-        else
-          (std.array.slice start value_length x | Dyn)
-          |> arrayOf pred,
-
-  maxItems
-    : Number -> Dyn -> [|
-      'Ok,
-      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-    |]
-    | doc m%"
-      `maxItems n x` fails if `x` is an array of length strictly greater than `n` and succeeds otherwise.
-      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.3]
-    "%
-    = fun n x =>
-      if !std.is_array x then
-        'Ok
-      else if std.array.length (x | Array Dyn) > n then
-        error_lib.mk_error "array is longer than %{std.string.from_number n} items"
-      else
-        'Ok,
-
-  minItems
-    : Number -> Dyn -> [|
-      'Ok,
-      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-    |]
-    | doc m%"
-      `minItems n x` fails if `x` is an array of length strictly smaller than `n` and succeeds otherwise.
-      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.4]
-    "%
-    = fun n x =>
-      if !std.is_array x then
-        'Ok
-      else if std.array.length (x | Array Dyn) < n then
-        error_lib.mk_error "array is shorter than %{std.string.from_number n} items"
-      else
-        'Ok,
+  # TODO: lazy version of Items
 
   uniqueItems
-    : Dyn -> [|
-      'Ok,
-      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-    |]
     | doc m%"
       Succeeds for any array if its elements are pairwise distinct.
       Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.5]
@@ -196,30 +130,28 @@ let error_lib = import "./error.ncl" in
       in
       fun x =>
         if !std.is_array x then
-          'Ok
+          'Error { message = "expected an array" }
         else
-          let { has_duplicate, duplicate, .. } = find_duplicate (x | Array Dyn)
+          let { has_duplicate, duplicate, .. } = find_duplicate x
           in
           if has_duplicate then
-            error_lib.mk_error "duplicate found: %{std.serialize 'Json duplicate}"
+            'Error { message = "duplicate found: %{std.serialize 'Json duplicate}" }
           else
             'Ok,
 
-  contract = {
-    minItems
-      : Number -> Dyn
-      | doc m%"
+  minItems
+    : Number -> Dyn
+    | doc m%"
         A contract that checks whether an array has at least a certain number of items.
       "%
-      = fun n =>
-        std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) >= n),
+    = fun n =>
+      std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) >= n),
 
-    maxItems
-      : Number -> Dyn
-      | doc m%"
+  maxItems
+    : Number -> Dyn
+    | doc m%"
         A contract that checks whether an array has at most a certain number of items.
       "%
-      = fun n =>
-        std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) <= n),
-  }
+    = fun n =>
+      std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) <= n),
 }

@@ -1,3 +1,8 @@
+// TODO;
+// - in the github example, why doesn't the {_ | Dyn} in services get removed?
+// - simplify types in if/then expressions without an else
+// - rewrite the contracts library
+
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -301,25 +306,13 @@ impl Schema {
             Schema::Array(arr) => vec![arr.to_contract(ctx)],
             Schema::Ref(s) => vec![ctx.ref_term(s)],
             Schema::AnyOf(vec) => {
-                vec![if ctx.eager || !eagerly_disjoint(vec.iter(), ctx.refs) {
-                    let contracts = vec
-                        .iter()
-                        .map(|s| sequence(s.to_contract(ctx.eager())))
-                        .collect();
-                    mk_app!(
-                        ctx.js2n("any_of"),
-                        Term::Array(contracts, ArrayAttrs::default())
-                    )
-                } else {
-                    let contracts = vec
-                        .iter()
-                        .map(|s| sequence(s.to_contract(ctx.lazy())))
-                        .collect();
-                    mk_app!(
-                        ctx.std("contract.any_of"),
-                        Term::Array(contracts, ArrayAttrs::default())
-                    )
-                }]
+                let eager = ctx.eager || !eagerly_disjoint(vec.iter(), ctx.refs);
+                let ctx = if eager { ctx.eager() } else { ctx.lazy() };
+                let contracts = vec.iter().map(|s| sequence(s.to_contract(ctx))).collect();
+                vec![mk_app!(
+                    ctx.std("contract.any_of"),
+                    Term::Array(contracts, ArrayAttrs::default())
+                )]
             }
             Schema::OneOf(vec) => {
                 let contracts = vec
@@ -609,7 +602,7 @@ impl ObjectProperties {
             let (pattern, schema) = self.pattern_properties.iter().next().unwrap();
             let dict = dict_contract(schema, ctx);
             let names = mk_app!(
-                ctx.std("record.FieldsMatch"),
+                ctx.std("records.FieldsMatch"),
                 Term::Str(pattern.to_owned().into())
             );
             Some(vec![dict, names])
@@ -712,7 +705,7 @@ impl Arr {
             Arr::AllItems(schema) => {
                 if ctx.eager {
                     mk_app!(
-                        ctx.js2n("arrays.eager.Array"),
+                        ctx.js2n("arrays.eager.ArrayOf"),
                         sequence(schema.to_contract(ctx))
                     )
                 } else {
@@ -2085,7 +2078,6 @@ impl ContractContext<'_, '_> {
 pub fn to_nickel(s: Schema, refs: &References, import_term: RichTerm) -> RichTerm {
     let (s, mut all_refs) = all_ref_names(s);
 
-    // TODO: maybe this is redundant now that we collect refs recursively
     let mut unfollowed_refs = all_refs.clone();
     let (s, mut shadowed_names) = all_shadowed_names(s);
 
@@ -2154,7 +2146,7 @@ pub fn to_nickel(s: Schema, refs: &References, import_term: RichTerm) -> RichTer
     make::let_one_in(
         ctx.lib_name,
         import_term,
-        make::let_one_in(ctx.refs_name, refs_dict, sequence(main_contract)),
+        make::let_one_rec_in(ctx.refs_name, refs_dict, sequence(main_contract)),
     )
 }
 
