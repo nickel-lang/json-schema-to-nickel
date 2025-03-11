@@ -263,8 +263,8 @@ impl Schema {
             Schema::Boolean => vec![type_contract(TypeF::Bool)],
             Schema::Const(val) => {
                 let nickel_val: RichTerm = serde_json::from_value(val.clone()).unwrap();
-                if ctx.eager && (val.is_object() || val.is_array()) {
-                    vec![mk_app!(ctx.js2n("const"), nickel_val)]
+                if ctx.eager {
+                    vec![mk_app!(ctx.js2n("Const"), nickel_val)]
                 } else {
                     vec![mk_app!(ctx.std("contract.Equal"), nickel_val)]
                 }
@@ -335,7 +335,7 @@ impl Schema {
             Schema::Not(schema) => {
                 vec![mk_app!(
                     ctx.std("contract.not"),
-                    sequence(schema.to_contract(ctx))
+                    sequence(schema.to_contract(ctx.eager()))
                 )]
             }
         }
@@ -357,7 +357,8 @@ impl Schema {
                 | Obj::MaxProperties(_)
                 | Obj::MinProperties(_)
                 | Obj::Required(_)
-                | Obj::PropertyNames(_) => true,
+                | Obj::PropertyNames(_)
+                | Obj::DependentFields(_) => true,
                 Obj::Properties(props) => {
                     props
                         .properties
@@ -372,10 +373,7 @@ impl Schema {
                             .as_ref()
                             .is_none_or(|s| s.is_always_eager(refs))
                 }
-                Obj::Dependencies(deps) => deps.values().all(|d| match d {
-                    Dependency::Array(_) => true,
-                    Dependency::Schema(schema) => schema.is_always_eager(refs),
-                }),
+                Obj::DependentSchemas(deps) => deps.values().all(|s| s.is_always_eager(refs)),
             },
             Schema::Array(arr) => match arr {
                 Arr::Any
@@ -408,7 +406,8 @@ pub enum Obj {
     Required(BTreeSet<String>),
     // This could be simplified maybe, because we're guaranteed that this will only need to validate strings.
     PropertyNames(Box<Schema>),
-    Dependencies(BTreeMap<String, Dependency>),
+    DependentFields(BTreeMap<String, Vec<String>>),
+    DependentSchemas(BTreeMap<String, Schema>),
 }
 
 impl Obj {
@@ -419,43 +418,64 @@ impl Obj {
                 flavour: nickel_lang_core::typ::DictTypeFlavour::Contract,
             })],
             Obj::Properties(op) => op.to_special_contract(ctx).unwrap_or_else(|| {
-                let additional_allowed =
-                    !matches!(op.additional_properties.as_deref(), Some(Schema::Never));
-                let additional_contract = match op.additional_properties.as_deref() {
-                    Some(s) => sequence(s.to_contract(ctx)),
-                    None => type_contract(TypeF::Dyn),
+                let additional = match op.additional_properties.as_deref() {
+                    Some(Schema::Never) => Term::Enum("None".into()),
+                    Some(s) => Term::EnumVariant {
+                        tag: "Some".into(),
+                        arg: sequence(s.to_contract(ctx)),
+                        attrs: Default::default(),
+                    },
+                    None => Term::EnumVariant {
+                        tag: "Some".into(),
+                        arg: type_contract(TypeF::Dyn),
+                        attrs: Default::default(),
+                    },
                 };
+                let properties = Term::Record(RecordData::with_field_values(
+                    op.properties
+                        .iter()
+                        .map(|(k, v)| (k.into(), sequence(v.schema.to_contract(ctx)))),
+                ));
+                let required = Term::Record(RecordData::with_field_values(
+                    op.properties.iter().filter_map(|(k, v)| {
+                        if !v.optional {
+                            Some((k.into(), Term::Bool(true).into()))
+                        } else {
+                            None
+                        }
+                    }),
+                ));
+                let patterns = Term::Record(RecordData::with_field_values(
+                    op.pattern_properties
+                        .iter()
+                        .map(|(k, v)| (k.into(), sequence(v.to_contract(ctx)))),
+                ));
+
                 vec![mk_app!(
-                    ctx.js2n("records.Record"),
-                    Term::Record(RecordData::with_field_values(
-                        op.properties
-                            .iter()
-                            .map(|(k, v)| (k.into(), sequence(v.schema.to_contract(ctx))))
-                    )),
-                    Term::Record(RecordData::with_field_values(
-                        op.pattern_properties
-                            .iter()
-                            .map(|(k, v)| (k.into(), sequence(v.to_contract(ctx))))
-                    )),
-                    Term::Bool(additional_allowed),
-                    additional_contract
+                    ctx.js2n("record.Record"),
+                    Term::Record(RecordData::with_field_values([
+                        ("properties".into(), properties.into()),
+                        ("required".into(), required.into()),
+                        ("patterns".into(), patterns.into()),
+                        ("additional".into(), additional.into())
+                    ]))
                 )]
             }),
             Obj::MaxProperties(n) => {
                 vec![mk_app!(
-                    ctx.js2n("records.MaxProperties"),
+                    ctx.js2n("record.MaxProperties"),
                     Term::Num((*n).into())
                 )]
             }
             Obj::MinProperties(n) => {
                 vec![mk_app!(
-                    ctx.js2n("records.MinProperties"),
+                    ctx.js2n("record.MinProperties"),
                     Term::Num((*n).into())
                 )]
             }
             Obj::Required(names) => {
                 vec![mk_app!(
-                    ctx.js2n("records.Required"),
+                    ctx.js2n("record.Required"),
                     Term::Array(
                         names.iter().map(|s| Term::Str(s.into()).into()).collect(),
                         ArrayAttrs::default()
@@ -464,29 +484,33 @@ impl Obj {
             }
             Obj::PropertyNames(schema) => {
                 vec![mk_app!(
-                    ctx.js2n("records.PropertyNames"),
+                    ctx.js2n("record.PropertyNames"),
                     sequence(schema.to_contract(ctx))
                 )]
             }
-            Obj::Dependencies(deps) => {
+            Obj::DependentFields(deps) => {
                 vec![mk_app!(
-                    ctx.js2n("records.Dependencies"),
+                    ctx.js2n("record.DependentFields"),
                     Term::Record(RecordData::with_field_values(deps.iter().map(
-                        |(key, value)| (
-                            LocIdent::from(key),
-                            match value {
-                                Dependency::Array(fields) => {
-                                    Term::Array(
-                                        fields.iter().map(make::string).collect(),
-                                        Default::default(),
-                                    )
-                                    .into()
-                                }
-                                Dependency::Schema(schema) => {
-                                    sequence(schema.to_contract(ctx))
-                                }
-                            }
-                        )
+                        |(key, value)| {
+                            let arr = Term::Array(
+                                value.iter().map(make::string).collect(),
+                                Default::default(),
+                            )
+                            .into();
+                            (LocIdent::from(key), arr)
+                        }
+                    )))
+                )]
+            }
+            Obj::DependentSchemas(deps) => {
+                vec![mk_app!(
+                    ctx.js2n("record.DependentContracts"),
+                    Term::Record(RecordData::with_field_values(deps.iter().map(
+                        |(key, schema)| {
+                            let contract = sequence(schema.to_contract(ctx));
+                            (LocIdent::from(key), contract)
+                        }
                     )))
                 )]
             }
@@ -525,11 +549,7 @@ impl ObjectProperties {
             None | Some(Schema::Always) | Some(Schema::Never)
         );
         let no_additional = self.additional_properties.as_deref() == Some(&Schema::Never);
-        let trivial_properties = self.properties.values().all(|p| p.schema == Schema::Always);
-        if self.pattern_properties.is_empty()
-            && trivial_additional
-            && (!ctx.eager || trivial_properties)
-        {
+        if self.pattern_properties.is_empty() && trivial_additional && !ctx.eager {
             // A normal record contract, which may or may not be open. If all the element contracts
             // are trivial, this will even be an eager contract.
             let open = matches!(
@@ -601,7 +621,7 @@ impl ObjectProperties {
             let (pattern, schema) = self.pattern_properties.iter().next().unwrap();
             let dict = dict_contract(schema, ctx);
             let names = mk_app!(
-                ctx.std("records.FieldsMatch"),
+                ctx.js2n("record.FieldsMatch"),
                 Term::Str(pattern.to_owned().into())
             );
             Some(vec![dict, names])
@@ -644,7 +664,7 @@ impl Str {
             Str::MinLength(n) => {
                 mk_app!(ctx.js2n("string.MinLength"), Term::Num((*n).into()))
             }
-            Str::Pattern(s) => mk_app!(ctx.std("string.Matches"), Term::Str(s.to_owned().into())),
+            Str::Pattern(s) => mk_app!(ctx.js2n("string.Matches"), Term::Str(s.to_owned().into())),
         }
     }
 }
@@ -655,7 +675,7 @@ pub enum Num {
     // The json-schema reference doesn't say this has to be an integer (and
     // if it isn't an integer it doesn't specify how rounding is supposed to
     // be handled).
-    MultipleOf(i64),
+    MultipleOf(NotNan<f64>),
     Maximum(NotNan<f64>),
     Minimum(NotNan<f64>),
     ExclusiveMinimum(NotNan<f64>),
@@ -667,16 +687,14 @@ impl Num {
     pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
         match self {
             Num::Any => type_contract(TypeF::Number),
-            Num::MultipleOf(n) => {
-                mk_app!(ctx.js2n("number.multipleOf"), Term::Num((*n).into()))
-            }
-            Num::Maximum(x) => mk_app!(ctx.js2n("number.maximum"), num(*x)),
-            Num::Minimum(x) => mk_app!(ctx.js2n("number.minimum"), num(*x)),
+            Num::MultipleOf(x) => mk_app!(ctx.js2n("number.MultipleOf"), num(*x)),
+            Num::Maximum(x) => mk_app!(ctx.js2n("number.Maximum"), num(*x)),
+            Num::Minimum(x) => mk_app!(ctx.js2n("number.Minimum"), num(*x)),
             Num::ExclusiveMinimum(x) => {
-                mk_app!(ctx.js2n("number.exclusiveMinimum"), num(*x))
+                mk_app!(ctx.js2n("number.ExclusiveMinimum"), num(*x))
             }
             Num::ExclusiveMaximum(x) => {
-                mk_app!(ctx.js2n("number.exclusiveMaximum"), num(*x))
+                mk_app!(ctx.js2n("number.ExclusiveMaximum"), num(*x))
             }
             Num::Integer => ctx.std("number.Integer"),
         }
@@ -1021,21 +1039,6 @@ fn get_unsigned(obj: &Map<String, Value>, field: &str) -> miette::Result<Option<
     }
 }
 
-fn get_integer(obj: &Map<String, Value>, field: &str) -> miette::Result<Option<i64>> {
-    if let Some(val) = obj.get(field) {
-        match val.as_number() {
-            Some(n) => Ok(Some(
-                n.as_i64()
-                    // TODO: better number handling
-                    .ok_or_else(|| miette!("{field} was a weird number"))?,
-            )),
-            None => miette::bail!("{field} must be an integer"),
-        }
-    } else {
-        Ok(None)
-    }
-}
-
 fn get_number(obj: &Map<String, Value>, field: &str) -> miette::Result<Option<f64>> {
     if let Some(val) = obj.get(field) {
         match val.as_number() {
@@ -1126,8 +1129,10 @@ fn extract_string_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
 fn extract_number_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>> {
     let mut ret = Vec::new();
 
-    if let Some(mult) = get_integer(obj, "multipleOf")? {
-        ret.push(Schema::Number(Num::MultipleOf(mult)));
+    if let Some(mult) = get_number(obj, "multipleOf")? {
+        ret.push(Schema::Number(Num::MultipleOf(
+            NotNan::try_from(mult).unwrap(),
+        )));
     }
     if let Some(max) = get_number(obj, "maximum")? {
         ret.push(Schema::Number(Num::Maximum(NotNan::try_from(max).unwrap())));
@@ -1179,7 +1184,8 @@ fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
         ))));
     }
     if let Some(deps) = get_object(obj, "dependencies")? {
-        let mut deps_map = BTreeMap::new();
+        let mut dep_fields = BTreeMap::new();
+        let mut dep_schemas = BTreeMap::new();
         for (field, val) in deps {
             if let Some(arr) = val.as_array() {
                 let names = arr
@@ -1190,10 +1196,17 @@ fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
                             .map(str::to_owned)
                     })
                     .collect::<miette::Result<_>>()?;
-                deps_map.insert(field.to_owned(), Dependency::Array(names));
+                dep_fields.insert(field.to_owned(), names);
             } else {
-                deps_map.insert(field.to_owned(), Dependency::Schema(val.try_into()?));
+                dep_schemas.insert(field.to_owned(), val.try_into()?);
             }
+        }
+
+        if !dep_fields.is_empty() {
+            ret.push(Schema::Object(Obj::DependentFields(dep_fields)));
+        }
+        if !dep_schemas.is_empty() {
+            ret.push(Schema::Object(Obj::DependentSchemas(dep_schemas)));
         }
     }
 
@@ -1395,9 +1408,13 @@ impl Traverse<Schema> for Obj {
         F: FnMut(Schema) -> Result<Schema, E>,
     {
         let val = match self {
-            Obj::Any | Obj::MaxProperties(_) | Obj::MinProperties(_) | Obj::Required(_) => self,
+            Obj::Any
+            | Obj::MaxProperties(_)
+            | Obj::MinProperties(_)
+            | Obj::Required(_)
+            | Obj::DependentFields(_) => self,
             Obj::PropertyNames(schema) => Obj::PropertyNames(schema.traverse(f, order)?),
-            Obj::Dependencies(hash_map) => Obj::Dependencies(hash_map.traverse(f, order)?),
+            Obj::DependentSchemas(deps) => Obj::DependentSchemas(deps.traverse(f, order)?),
             Obj::Properties(props) => Obj::Properties(ObjectProperties {
                 properties: props.properties.traverse(f, order)?,
                 pattern_properties: props.pattern_properties.traverse(f, order)?,
@@ -2140,6 +2157,21 @@ pub fn to_nickel(s: Schema, refs: &References, import_term: RichTerm) -> RichTer
     )
 }
 
+pub fn convert(val: &serde_json::Value, lib_import: RichTerm) -> miette::Result<RichTerm> {
+    let schema: Schema = val.try_into()?;
+    let (schema, all_refs) = resolve_references_recursive(val, schema);
+    let refs = References::new(&all_refs);
+    let simple_refs = all_refs
+        .iter()
+        .map(|(k, v)| (k.clone(), simplify(v.clone(), &refs)))
+        .collect();
+    let refs = References::new(&simple_refs);
+    let schema = inline_refs(schema, &refs);
+    let schema = simplify(schema, &refs);
+
+    Ok(to_nickel(schema, &refs, lib_import))
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::stdout;
@@ -2192,11 +2224,11 @@ mod tests {
     #[test]
     fn regex_expansion() {
         assert_eq!(
-            enumerate_regex("^foo|bar$", 2),
-            Some(vec!["bar".to_owned(), "^foo$".to_owned()])
+            enumerate_regex("^(foo|bar)$", 2),
+            Some(vec!["bar".to_owned(), "foo".to_owned()])
         );
 
-        assert_eq!(enumerate_regex("^foo|bar$", 1), None);
+        assert_eq!(enumerate_regex("^(foo|bar)$", 1), None);
 
         assert_eq!(
             enumerate_regex("^(foo|bar)s?$", 4),

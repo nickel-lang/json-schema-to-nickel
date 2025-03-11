@@ -10,7 +10,7 @@ let from_predicate | (Number -> Bool) -> String -> Dyn = fun pred msg =>
 in
 {
   MultipleOf
-    | std.number.Integer -> Dyn
+    | Number -> Dyn
     | doc m%"
       `MultipleOf n` is a contract checking whether a value is a multiple of `n`.
 

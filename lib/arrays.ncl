@@ -40,7 +40,7 @@
     | doc m%"
       A contract checking that an array contains something satisfying another contract.
 
-      For example, `contains Number` is a contract checking that the value is an array
+      For example, `Contains Number` is a contract checking that the value is an array
       and that it contains at least one number.
 
       This is an eager contract, and it assumes that the inputs are also eager.
@@ -49,10 +49,10 @@
       # Examples
 
       ```nickel multiline
-      ["hi", true, 1] | contains Bool
+      ["hi", true, 1] | Contains Bool
       # => ["hi", true, 1]
 
-      ["hi", true, 1] | contains (Array Bool)
+      ["hi", true, 1] | Contains (Array Bool)
       # => error
       ```
     "%

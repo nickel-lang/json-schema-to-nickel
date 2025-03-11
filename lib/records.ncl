@@ -51,28 +51,48 @@ let ErrData = { message | optional | String, notes | optional | Array String } i
   Required
     | Array String -> Dyn
     | doc m%"
-      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.5.3]
-    "%,
-  # = fun fields x =>
-  #   if !std.is_record x then
-  #     'Ok
-  #   else
-  #     fields
-  #     |> std.array.fold_right
-  #       (fun field acc =>
-  #         if !std.record.has_field field (x | { _ : Dyn }) then
-  #           error_lib.mk_error "missing required field %{field}"
-  #         else
-  #           acc
-  #       )
-  #       'Ok,
+      A contract asserting that a record has certain fields.
+
+      # Examples
+
+
+      ```nickel multiline
+      { foo = 1, bar = 2 } | Required [ "foo" ]
+      # => { foo = 1, bar = 2 }
+
+      { foo = 1, bar = 2 } | Required [ "baz" ]
+      # => error: missing required field baz
+
+      "baz" | Required [ "baz" ]
+      # => error: expected a record
+      ```
+    "%
+    = fun fields =>
+      std.contract.from_validator (fun value =>
+        if !std.is_record value then
+          'Error { message = "expected a record" }
+        else
+          fields
+          |> std.array.try_fold_left
+            (fun acc field =>
+              if !std.record.has_field field value then
+                'Error { message = "missing required field %{field}" }
+              else
+                'Ok acc
+            )
+            null
+          |> match {
+            'Error e => 'Error e,
+            'Ok _ => 'Ok
+          }
+      ),
 
   Record
-    | { properties | { _ | Dyn }, patterns | { _ | Dyn }, additional | [| 'None, 'Some Dyn |] } -> Dyn
+    | { properties | { _ | Dyn }, required | { _ | Dyn }, patterns | { _ | Dyn }, additional | [| 'None, 'Some Dyn |] } -> Dyn
     | doc m%"
       A contract for checking JSON Schema object properties.
 
-      In `Record { properties, patterns, additional }`, properties and patterns
+      In `Record { properties, required, patterns, additional }`, properties and patterns
       should be dicts containing contracts as values. These contracts will be
       applied to the appropriate fields of your record. `additional` can be
       `None` (in which case fields not matching `properties` or `patterns` are
@@ -90,44 +110,51 @@ let ErrData = { message | optional | String, notes | optional | Array String } i
       # Examples
 
       ```nickel multiline
-      { foo = 1 } | Record { properties = { foo = Number }, patterns = {}, additional = 'None }
+      { foo = 1 } | Record { properties = { foo = Number }, required = {}, patterns = {}, additional = 'None }
       # => { foo = 1 }
 
       # Properties aren't required to be present.
-      { } | Record { properties = { foo = Number }, patterns = {}, additional = 'None }
+      { } | Record { properties = { foo = Number }, required = {}, patterns = {}, additional = 'None }
       # => { }
+  
+      # Properties aren't required to be present.
+      { } | Record { properties = { foo = Number }, required = { foo = null }, patterns = {}, additional = 'None }
+      # => error
 
       # If something in properties also matches a pattern, both contracts are applied.
-      { foo = 1.1 } | Record { properties = { foo = Number }, patterns = { "." = std.number.Integer }, additional = 'None }
+      { foo = 1.1 } | Record { properties = { foo = Number }, required = {}, patterns = { "." = std.number.Integer }, additional = 'None }
       # => error: expected an integer
 
       # additional being 'None means that unmatched fields are forbidden
-      { bar = 1 } | Record { properties = { foo = Number }, patterns = {}, additional = 'None }
+      { bar = 1 } | Record { properties = { foo = Number }, required = {}, patterns = {}, additional = 'None }
       # => error: extra fields
 
       # fields that are matched by a pattern don't count as "additional"
-      { bar = 1 } | Record { properties = { foo = Number }, patterns = { "." = Number }, additional = 'None }
+      { bar = 1 } | Record { properties = { foo = Number }, required = {}, patterns = { "." = Number }, additional = 'None }
       # => { bar = 1 }
 
       # additional being 'Some applies the extra contract to unmatched fields
-      { bar = 1 } | Record { properties = { foo = Number }, patterns = {}, additional = 'Some String }
+      { bar = 1 } | Record { properties = { foo = Number }, required = {}, patterns = {}, additional = 'Some String }
       # => error
 
       # Inner contracts are propagated
-      { foo = { bar = 1 }} | Record { properties = { foo = { bar | String } }, patterns = {}, additional = 'None }
+      { foo = { bar = 1 }} | Record { properties = { foo = { bar | String } }, required = {}, patterns = {}, additional = 'None }
       # => error: contract broken by the value of `bar`
 
       # Inner contracts aren't evaluated eagerly
-      ({ foo = { bar = 1 }, baz = 2} | Record { properties = { foo = { bar | String } }, patterns = {}, additional = 'Some Dyn }).baz
+      ({ foo = { bar = 1 }, baz = 2} | Record { properties = { foo = { bar | String } }, required = {}, patterns = {}, additional = 'Some Dyn }).baz
       # => 2
       ```
     "%
-    = fun { properties, patterns, additional } =>
+    = fun { properties, required, patterns, additional } =>
       std.contract.custom (fun label x =>
         if !std.is_record x then
           'Error { message = "expected a record" }
         else
           let x = x | { _ | Dyn } in
+          let required = required | { _ | Dyn } in
+          # Build a dict of everything checked by "properties". The field values
+          # in this dict have any inner contracts applied.
           let checked_properties
             : [| 'Ok { _ | Dyn }, 'Error ErrData |]
             =
@@ -135,7 +162,10 @@ let ErrData = { message | optional | String, notes | optional | Array String } i
               |> std.array.try_fold_left
                 (fun acc { field, value = contract } =>
                   if !std.record.has_field field x then
-                    'Ok acc
+                    if std.record.has_field field required then
+                      'Error ({ message = "missing required field `%{field}`" } | ErrData)
+                    else
+                      'Ok acc
                   else
                     std.contract.check contract label x."%{field}"
                     |> match {
@@ -158,6 +188,9 @@ let ErrData = { message | optional | String, notes | optional | Array String } i
               )
               {}
           in
+          # Build a dict of everything checked by "patterns". The field values
+          # in this dict have any inner contracts applied. This can have overlap
+          # with "checked_properties"; they'll get merged together later.
           let checked_pattern_properties
             : [| 'Ok { _ | Dyn }, 'Error ErrData |]
             =
@@ -229,80 +262,137 @@ let ErrData = { message | optional | String, notes | optional | Array String } i
           }
       ),
 
-  # dependencies
-  #   : { _ : Dyn } -> Dyn -> [|
-  #     'Ok,
-  #     'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-  #   |]
-  #   | doc m%"
-  #     Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.5.7]
-  #   "%
-  #   =
-  #     let mustHaveFields
-  #       : Array String -> { _ : Dyn } -> [|
-  #         'Ok,
-  #         'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-  #       |]
-  #       = fun fields x =>
-  #         fields
-  #         |> std.array.fold_right
-  #           (fun field acc =>
-  #             if !std.record.has_field field x then
-  #               error_lib.mk_error "expected field `%{field}`"
-  #             else
-  #               acc
-  #           )
-  #           'Ok
-  #     in
-  #     fun deps x =>
-  #       if !std.is_record x then
-  #         'Ok
-  #       else
-  #         let x = x | { _ : Dyn } in
-  #         deps
-  #         |> std.record.to_array
-  #         |> std.array.fold_right
-  #           (fun { field, value } acc =>
-  #             if !std.record.has_field field x then
-  #               acc
-  #             else
-  #               let result =
-  #                 if std.is_array value then
-  #                   mustHaveFields (value | Array String) x
-  #                 else
-  #                   let pred = value | Dyn -> [| 'Ok, 'Error { message : String, source : Array [| 'Array Number, 'Field String |] } |] in
-  #                   pred (x | Dyn)
-  #               in
-  #               result
-  #               |> match {
-  #                 'Ok => acc,
-  #                 'Error error =>
-  #                   'Error {
-  #                     message = "dependency of `%{field}` failed: %{error.message}",
-  #                     source = std.array.prepend ('Field field) error.source,
-  #                   },
-  #               }
-  #           )
-  #           'Ok,
+  DependentFields
+    | { _ | Array String } -> Dyn
+    | doc m%"
+      TODO
+
+      ```nickel multiline
+      { foo = 1, bar = 2 } | DependentFields { foo = ["bar"] }
+
+      { foo = 1, baz = 2 } | DependentFields { foo = ["bar"] }
+      # => error: expected field bar
+
+      { baz = 2 } | DependentFields { foo = ["bar"] }
+      ```
+    "%
+    = fun dependencies =>
+      std.contract.from_validator (fun value =>
+        if !std.is_record value then
+          'Error { message = "expected a record" }
+        else
+          let must_have_fields : Array String -> { _ : Dyn } -> [| 'Ok, 'Error ErrData |] = fun fields x =>
+            fields
+            |> std.array.fold_right
+              (fun field acc =>
+                if !std.record.has_field field x then
+                  'Error ({ message = "expected field %{field}" } | ErrData)
+                else
+                  acc
+              )
+              'Ok
+          in
+          dependencies
+          |> std.record.to_array
+          |> std.array.fold_right
+            (fun { field, value = dependent_fields } acc =>
+              if std.record.has_field field value then
+                must_have_fields dependent_fields value
+                |> match {
+                  'Ok => acc,
+                  'Error e => 'Error (e & { notes = ["because field %{field} was present"] }),
+                }
+              else
+                acc
+            )
+            'Ok
+      ),
+
+  DependentContracts
+    | { _ | Dyn } -> Dyn
+    | doc m%"
+
+      # Examples
+
+      ```nickel multiline
+      { foo = 1, bar = 2 } | DependentContracts { foo = { bar | Number, .. } }
+
+      { foo = 1, bar = 2 } | DependentContracts { foo = { bar | Number } }
+      # => error: extra field `foo`
+
+      # This one doesn't fail: the inner contract never gets triggered because there's no `baz` field
+      { foo = 1, bar = 2 } | DependentContracts { baz = { bar | Number } }
+
+      1 | DependentContracts { baz = { bar | Number } }
+      # => error: expected a record
+      ```
+    "%
+    = fun deps =>
+      std.contract.custom (fun label value =>
+        if !std.is_record value then
+          'Error { message = "expected a record" }
+        else
+          deps
+          |> std.record.to_array
+          # In this fold, the accumulator is `value` wrapped with whatever delayed
+          # checks the dependent contracts have applied so far.
+          |> std.array.try_fold_left
+            (fun acc { field, value = contract } =>
+              if std.record.has_field field value then
+                std.contract.check contract label acc
+              else
+                'Ok acc
+            )
+            value
+      ),
 
   # TODO: replace with std.record.FieldsMatch once that's in a nickel release
-  FieldsMatch | String -> Dyn = fun regex =>
-    let is_match = std.string.is_match regex in
-    std.contract.from_validator (fun x =>
-      if !std.is_record x then
-        'Error { message = "expected a record" }
-      else
-        let bad_field_names =
-          std.record.fields x
-          |> std.array.filter (fun k => !(is_match k))
-          |> std.array.map (fun k => m%""${k}""%)
-        in
-        if std.array.length bad_field_names > 0 then
-          'Error {
-            message = "invalid field names %{std.string.join "," bad_field_names}",
-            notes = ["expected fields to match %{regex}"]
-          }
+  FieldsMatch
+    | String -> Dyn
+    = fun regex =>
+      let is_match = std.string.is_match regex in
+      std.contract.from_validator (fun x =>
+        if !std.is_record x then
+          'Error { message = "expected a record" }
         else
-          'Ok
+          let bad_field_names =
+            std.record.fields x
+            |> std.array.filter (fun k => !(is_match k))
+            |> std.array.map (fun k => m%""${k}""%)
+          in
+          if std.array.length bad_field_names > 0 then
+            'Error {
+              message = "invalid field names %{std.string.join "," bad_field_names}",
+              notes = ["expected fields to match %{regex}"]
+            }
+          else
+            'Ok
+      ),
+
+  PropertyNames
+    | Dyn ->Dyn
+    | doc m%"
+      TODO
+
+      ```nickel multiline
+      { foo = 1 } | PropertyNames std.string.NonEmpty
+
+      { "1" = 1 } | PropertyNames std.string.NumberLiteral
+
+      { foo = 1 } | PropertyNames std.string.NumberLiteral
+      # => error: invalid number literal
+      ```
+    "%
+    = fun contract => std.contract.custom (fun label value =>
+      if !std.is_record value then
+      'Error { message = "expected a record" }
+      else
+        std.record.fields value
+        |> std.array.try_fold_left (fun acc field_name =>
+          std.contract.check contract label field_name |> match {
+            'Ok _ => 'Ok value,
+            'Error e => 'Error e,
+        }
+        ) ('Ok value)
     ),
 }

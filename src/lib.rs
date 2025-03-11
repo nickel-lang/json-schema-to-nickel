@@ -85,13 +85,13 @@ pub fn wrap_inline_lib(env: Environment, contract: Contract) -> RichTerm {
 }
 
 pub fn inline_lib() -> RichTerm {
-    let lib_ncl = include_bytes!(concat!(env!("OUT_DIR"), "/predicates.ncl"));
+    let lib_ncl = include_bytes!(concat!(env!("OUT_DIR"), "/main.ncl"));
     let lib_ncl = String::from_utf8_lossy(lib_ncl);
 
     let mut cache = Cache::new(ErrorTolerance::Strict);
     let parser = TermParser::new();
     let file_id = cache.add_string(
-        SourcePath::Generated("predicates.ncl".to_owned()),
+        SourcePath::Generated("main.ncl".to_owned()),
         lib_ncl.to_string(),
     );
     let lexer = Lexer::new(cache.source(file_id));

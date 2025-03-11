@@ -15,7 +15,7 @@
         branches = ["main"]
       },
       pull_request = {
-        branch = ["main"]
+        branches = ["main"]
       }
     },
 
@@ -45,4 +45,3 @@
   |> std.deserialize 'Json
 )
   | (import "../../out.ncl")
-
