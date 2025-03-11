@@ -5,6 +5,9 @@
       An eager version of `Array`. `value | ArrayOf C` will succeed if `value` is an array and all of
       its elements satisfy the contract `C`.
 
+      Only the eager part of `C` is checked; the lazy part is discarded.
+      TODO: actually, we should propagate it. Otherwise TagOrString won't work as expected
+
       # Examples
 
       ```nickel multiline
