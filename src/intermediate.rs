@@ -29,7 +29,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    references::{SchemaPointer, SchemaPointerElt},
+    references::{self, SchemaPointer, SchemaPointerElt},
     utils::{distinct, static_access},
 };
 
@@ -1460,16 +1460,12 @@ pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, BTreeMap<St
     let mut refs = BTreeMap::new();
     let mut record_ref = |schema: Schema| -> Result<Schema, Infallible> {
         if let Schema::Ref(s) = schema {
-            let Some(stripped) = s.strip_prefix("#/") else {
-                eprintln!("skipping unsupported pointer \"{s}\"");
-                return Ok(Schema::Ref(s));
-            };
             if !refs.contains_key(&s) {
-                match SchemaPointer::parse(stripped) {
-                    Err(e) => {
-                        eprintln!("skipping unparseable pointer \"{s}\": {e}");
+                match references::resolve_ptr(&s) {
+                    None => {
+                        eprintln!("skipping unparseable pointer \"{s}\"");
                     }
-                    Ok(ptr) => match resolve_ptr(&ptr, value) {
+                    Some(ptr) => match resolve_ptr(&ptr, value) {
                         Ok(val) => match Schema::try_from(val) {
                             Ok(v) => {
                                 refs.insert(s.clone(), v);
@@ -1493,7 +1489,7 @@ pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, BTreeMap<St
     let schema = schema
         .traverse(&mut record_ref, TraverseOrder::BottomUp)
         .unwrap();
-    (schema, refs)
+    (schema, dbg!(refs))
 }
 
 pub fn resolve_references_recursive(
@@ -1541,14 +1537,14 @@ impl SchemaPointerElt {
 
 fn resolve_ptr<'a>(ptr: &SchemaPointer, root: &'a Value) -> miette::Result<&'a Value> {
     let mut val = root;
-    let Some(root) = root.as_object() else {
-        miette::bail!("root must be an object");
-    };
     for elt in ptr.path.iter() {
         match elt {
             SchemaPointerElt::Definitions(name) => {
-                val = get_object(root, "definitions")?
-                    .ok_or_else(|| miette!("no definitions in the root"))?
+                let Some(obj) = val.as_object() else {
+                    miette::bail!("cannot look up definitions in a non-object");
+                };
+                val = get_object(obj, "definitions")?
+                    .ok_or_else(|| miette!("no definitions"))?
                     .get(name)
                     .ok_or_else(|| miette!("missing {name}"))?;
             }
