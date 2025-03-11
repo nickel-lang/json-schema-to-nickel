@@ -1489,7 +1489,7 @@ pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, BTreeMap<St
     let schema = schema
         .traverse(&mut record_ref, TraverseOrder::BottomUp)
         .unwrap();
-    (schema, dbg!(refs))
+    (schema, refs)
 }
 
 pub fn resolve_references_recursive(
