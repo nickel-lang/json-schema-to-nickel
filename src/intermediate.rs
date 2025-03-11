@@ -2170,52 +2170,7 @@ pub fn convert(val: &serde_json::Value, lib_import: RichTerm) -> miette::Result<
 
 #[cfg(test)]
 mod tests {
-    use std::io::stdout;
-
-    use nickel_lang_core::{cache::InputFormat, pretty::*};
-
     use super::*;
-
-    #[test]
-    fn hack() {
-        // let data =
-        //     std::fs::read_to_string("examples/github-workflow/github-workflow.json").unwrap();
-        let data = std::fs::read_to_string("examples/simple-schema/test.schema.json").unwrap();
-        //let data = std::fs::read_to_string("test.json").unwrap();
-        let val: serde_json::Value = serde_json::from_str(&data).unwrap();
-        let schema: super::Schema = (&val).try_into().unwrap();
-        //dbg!(&schema);
-        let (schema, refs) = resolve_references(&val, schema);
-        let refs = References {
-            inner: &refs,
-            blackholed: RefCell::new(HashSet::new()),
-        };
-        //dbg!(&refs);
-
-        let simplified_refs = refs
-            .inner
-            .iter()
-            .map(|(k, v)| (k.clone(), simplify(v.clone(), &refs)))
-            .collect();
-        let refs = References {
-            inner: &simplified_refs,
-            blackholed: RefCell::new(HashSet::new()),
-        };
-        //dbg!(&refs);
-        let schema = inline_refs(schema, &refs);
-        let schema = simplify(schema, &refs);
-        //dbg!(&schema);
-
-        let pretty_alloc = Allocator::default();
-        let lib_import = Term::Import {
-            path: "import-path".into(),
-            format: InputFormat::Nickel,
-        }
-        .into();
-        let rt = to_nickel(schema, &refs, lib_import);
-        let out = rt.pretty(&pretty_alloc);
-        out.render(80, &mut stdout()).unwrap();
-    }
 
     #[test]
     fn regex_expansion() {
