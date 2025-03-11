@@ -378,8 +378,12 @@ impl Schema {
                 }),
             },
             Schema::Array(arr) => match arr {
-                Arr::Any | Arr::MaxItems(_) | Arr::MinItems(_) | Arr::UniqueItems => true,
-                Arr::AllItems(schema) | Arr::Contains(schema) => schema.is_always_eager(refs),
+                Arr::Any
+                | Arr::MaxItems(_)
+                | Arr::MinItems(_)
+                | Arr::UniqueItems
+                | Arr::Contains(_) => true,
+                Arr::AllItems(schema) => schema.is_always_eager(refs),
                 Arr::PerItem { initial, rest } => {
                     initial.iter().all(|s| s.is_always_eager(refs)) && rest.is_always_eager(refs)
                 }
@@ -715,16 +719,10 @@ impl Arr {
                 }
             }
             Arr::PerItem { initial, rest } => {
-                let f = if ctx.eager {
-                    ctx.js2n("arrays.eager.Items")
-                } else {
-                    ctx.js2n("arrays.Items")
-                };
-
                 let initial = initial.iter().map(|s| sequence(s.to_contract(ctx)));
                 let rest = sequence(rest.to_contract(ctx));
                 mk_app!(
-                    f,
+                    ctx.js2n("arrays.Items"),
                     Term::Array(initial.collect(), ArrayAttrs::default()),
                     rest
                 )
@@ -738,7 +736,7 @@ impl Arr {
             Arr::UniqueItems => ctx.js2n("arrays.UniqueItems"),
             Arr::Contains(schema) => {
                 let contract = sequence(schema.to_contract(ctx.eager()));
-                mk_app!(ctx.js2n("arrays.Contains"), contract)
+                mk_app!(ctx.js2n("arrays.eager.contains"), contract)
             }
         }
     }

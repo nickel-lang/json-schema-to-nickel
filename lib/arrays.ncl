@@ -3,107 +3,141 @@
     ArrayOf
       | Dyn -> Dyn
       | doc m%"
-      An eager version of `Array`. `value | ArrayOf C` will succeed if `value` is an array and all of
-      its elements satisfy the contract `C`.
-    "%
+        An eager version of `Array`. `value | ArrayOf C` will succeed if `value` is an array and all of
+        its elements satisfy the contract `C`.
+
+        # Examples
+
+        ```nickel multiline
+        [1, 2, 3] | ArrayOf Number
+        # => [1, 2, 3]
+
+        [1, 2, 3] | ArrayOf String
+        # => error
+        ```
+      "%
       = fun ctr =>
-        std.contract.from_validator (fun value =>
+        std.contract.custom (fun label value =>
           if !std.is_array value then
             'Error { message = "expected an array" }
           else
             value
             |> std.array.fold_right
               (fun elt acc =>
-                std.contract.check ctr elt
+                std.contract.check ctr label elt
                 |> match {
                   'Ok _ => acc,
                   'Error e => 'Error e
                 }
               )
-              'Ok
+              ('Ok value)
         ),
 
-    Items | Array Dyn -> Dyn -> Dyn = fun items rest =>
-      std.contract.from_validator (fun value =>
+    contains
+      | Dyn -> Dyn
+      | doc m%"
+        A contract checking that an array contains something satisfying another contract.
+
+        For example, `contains Number` is a contract checking that the value is an array
+        and that it contains at least one number.
+
+        This is an eager contract, and it assumes that the inputs are also eager.
+        Any lazy parts of the inputs will be ignored.
+
+        # Examples
+
+        ```nickel multiline
+        ["hi", true, 1] | contains Bool
+        # => ["hi", true, 1]
+
+        ["hi", true, 1] | contains (Array Bool)
+        # => error
+        ```
+      "%
+      = fun contract =>
+        std.contract.custom (fun label value =>
+          if !std.is_array value then
+            'Error { message = "expected an array" }
+          else
+            let good_elt = (fun elt => std.contract.check contract label elt |> match { 'Ok _ => true, 'Error _ => false }) in
+            if value |> std.array.any good_elt then
+              'Ok value
+            else
+              'Error { message = "no elements matched" }
+        ),
+  },
+
+  Items
+    | Array Dyn -> Dyn -> Dyn
+    | doc m%"
+      A contract checking that the first few elements of an array satisfy
+      specific contracts, and the remaining elements satisfy another contract.
+      For example, `Items [C1 C2] C3` is a contract checking that the value is
+      an array, that its first two elements (if present) satisfy `C1` and `C2`
+      respectively, and that any other elements satisfy `C3`.
+
+      # Examples
+
+      ```nickel multiline
+      [1, 2, "foo", "bar"] | Items [Number, Number] String
+
+      # The value is allowed to be shorter than the list of contracts.
+      [1] | Items [Number, Number] String
+
+      [1, "foo", "bar"] | Items [Number, Number] String
+      # => error
+
+      # Inner contracts are propagated, but note that the overall `Items` contract
+      # is eager if and only if all the contracts you pass in are eager.
+      [1, { foo = "str"}, "foo", "bar"] | Items [Number, { foo | Number }] String
+      # => error
+      ```
+    "%
+    = fun elt_contracts rest =>
+      std.contract.custom (fun label value =>
         if !std.is_array value then
           'Error { message = "expected an array" }
         else
-          # This seems off to me, but it's what the json-schema spec says: it's ok if the array
-          # we're validating is shorter than the array of contracts.
-          let length_to_check = std.number.min (std.array.length items) (std.array.length value) in
+          let length_to_check = std.number.min (std.array.length elt_contracts) (std.array.length value) in
           let { left, right } = std.array.split_at length_to_check value in
-          std.array.zip_with (fun ctr x => std.contract.check ctr x) items left
-          |> std.array.fold_left
+          std.array.zip_with (fun contract elt => std.contract.check contract label elt) elt_contracts left
+          |> std.array.try_fold_left
             (fun acc =>
               match {
-                'Ok _ => acc,
+                'Ok v => 'Ok (acc @ [v]),
                 'Error e => 'Error e
               }
             )
-            'Ok
+            []
           |> match {
             'Error e => 'Error e,
-            'Ok =>
+            'Ok left_with_contracts =>
               # The individual elements succeeded. If there's anything left in the array, check the `rest` contract.
               right
-              |> std.array.fold_right
-                (fun elt acc =>
-                  std.contract.check rest elt
+              |> std.array.try_fold_left
+                (fun acc elt =>
+                  std.contract.check rest label elt
                   |> match {
-                    'Ok _ => acc,
+                    'Ok v => 'Ok (acc @ [v]),
                     'Error e => 'Error e
                   }
                 )
-                'Ok
+                left_with_contracts
           }
       ),
-  },
 
-  contains
-    : (
-      Dyn -> [|
-        'Ok,
-        'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-      |]
-    ) -> Dyn -> [|
-      'Ok,
-      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-    |]
+  UniqueItems
     | doc m%"
-      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.6]
-    "%
-    = fun pred x =>
-      if !std.is_array x then
-        'Ok
-      else
-        let x = x | Array Dyn in
-        x
-        |> std.array.fold_right
-          (fun x acc =>
-            acc
-            |> match {
-              'Ok => 'Ok,
-              'Errors errors =>
-                pred x
-                |> match {
-                  'Ok => 'Ok,
-                  'Error error => 'Errors (std.array.prepend error errors),
-                }
-            }
-          )
-          ('Errors [])
-        |> match {
-          'Ok => 'Ok,
-          'Errors errors => 'Ok
-          #'Error (error_lib.combine "contains: no elements matched" errors),
-        },
+      Checks that the elements of an array are pairwise distinct.
 
-  # TODO: lazy version of Items
+      # Examples
 
-  uniqueItems
-    | doc m%"
-      Succeeds for any array if its elements are pairwise distinct.
-      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.4.5]
+      ```nickel multiline
+      [1, 2, "3"] | UniqueItems
+
+      [1, 3, 2, 3] | UniqueItems
+      # => error: duplicate found: 3
+      ```
     "%
     =
       let find_duplicate
@@ -128,7 +162,7 @@
             )
             { has_duplicate = false, duplicate = null, seen = {} }
       in
-      fun x =>
+      std.contract.from_validator (fun x =>
         if !std.is_array x then
           'Error { message = "expected an array" }
         else
@@ -137,20 +171,38 @@
           if has_duplicate then
             'Error { message = "duplicate found: %{std.serialize 'Json duplicate}" }
           else
-            'Ok,
+            'Ok
+      ),
 
-  minItems
+  MinItems
     : Number -> Dyn
     | doc m%"
         A contract that checks whether an array has at least a certain number of items.
+
+        # Examples
+
+        ```nickel multiline
+        [1, 2, 3] | MinItems 3
+
+        [1, 2, 3] | MinItems 4
+        # => error
+        ```
       "%
     = fun n =>
       std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) >= n),
 
-  maxItems
+  MaxItems
     : Number -> Dyn
     | doc m%"
         A contract that checks whether an array has at most a certain number of items.
+
+        # Examples
+
+        ```nickel multiline
+        [1, 2, 3] | MaxItems 3
+
+        [1, 2, 3] | MaxItems 2
+        # => error
       "%
     = fun n =>
       std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) <= n),
