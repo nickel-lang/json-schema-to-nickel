@@ -1,93 +1,68 @@
 {
-  maxLength
-    : Number -> Dyn -> [|
-      'Ok,
-      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-    |]
+  MaxLength
+    | Number -> Dyn
     | doc m%"
-      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.3.1]
-    "%
-    = fun limit x =>
-      if !std.is_string x then
-        'Ok
-      else if std.string.length (x | String) <= limit then
-        'Ok
-      else
-        'Error {
-          message = "expected a string of length no larger than %{std.string.from_number limit}",
-          source = [],
-        },
+      `MaxLength n` is a contract that checks for a string of length at most `n`.
 
-  minLength
-    : Number -> Dyn -> [|
-      'Ok,
-      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-    |]
-    | doc m%"
-      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.3.2]
-    "%
-    = fun limit x =>
-      if !std.is_string x then
-        'Ok
-      else if std.string.length (x | String) >= limit then
-        'Ok
-      else
-        'Error {
-          message = "expected a string of length no smaller than %{std.string.from_number limit}",
-          source = [],
-        },
+      Here, the "length" of a string is the number of extended grapheme clusters in the string.
+      This may not agree with the JSON schema semantics, which counts the number of Unicode
+      code points.
 
-  pattern
-    : String -> Dyn -> [|
-      'Ok,
-      'Error { message : String, source : Array [| 'Array Number, 'Field String |] }
-    |]
-    | doc m%"
-      Cf. [https://datatracker.ietf.org/doc/html/draft-handrews-json-schema-validation-01#section-6.3.3]
-    "%
-    = fun pattern x =>
-      if !std.is_string x then
-        'Ok
-      else if std.string.is_match pattern (x | String) then
-        'Ok
-      else
-        'Error {
-          message = "expected a string matching the pattern `%{pattern}`",
-          source = [],
-        },
+      # Examples
 
-  contract = {
-    Pattern | String -> Dyn = fun regex =>
-      std.contract.from_validator (fun s =>
-        let is_match = std.string.is_match regex in
-        if !std.is_string s then
+      ```nickel multiline
+      "Hello" | MaxLength 5
+
+      # 15 bytes, 3 code points, 1 extended grapheme cluster
+      "👨‍🦰" | MaxLength 1
+
+      "Hello" | MaxLength 4
+      # => error
+      ```
+    "%
+    = fun limit =>
+      std.contract.from_validator (fun value =>
+        if !std.is_string value then
           'Error { message = "expected a string" }
-        else if !is_match s then
-          'Error { message = "expected %{regex}" }
-        else
+        else if std.string.length value <= limit then
           'Ok
+        else
+          'Error {
+            message = "expected a string of length at most %{std.string.from_number limit}",
+          }
       ),
 
-    MinLength | Number -> Dyn = (fun len =>
-      std.contract.from_validator (fun s =>
-        if !std.is_string s then
-          'Error { message = "expected a string" }
-        else if std.string.length s < len then
-          'Error { message = "expected at least %{len} characters" }
-        else
-          'Ok
-      )
-    ),
+  MinLength
+    | Number -> Dyn
+    | doc m%"
+      `MinLength n` is a contract that checks for a string of length at least `n`.
 
-    MaxLength | Number -> Dyn = (fun len =>
-      std.contract.from_validator (fun s =>
-        if !std.is_string s then
+      Here, the "length" of a string is the number of extended grapheme clusters in the string.
+      This may not agree with the JSON schema semantics, which counts the number of Unicode
+      code points.
+
+      # Examples
+
+      ```nickel multiline
+      "Hello" | MinLength 5
+
+      # 15 bytes, 3 code points, 1 extended grapheme cluster
+      "👨‍🦰" | MinLength 3
+      # => error
+
+      "Hello" | MinLength 6
+      # => error
+      ```
+    "%
+    = fun limit =>
+      std.contract.from_validator (fun value =>
+        if !std.is_string value then
           'Error { message = "expected a string" }
-        else if std.string.length s > len then
-          'Error { message = "expected at most %{len} characters" }
-        else
+        else if std.string.length value >= limit then
           'Ok
-      )
-    ),
-  },
+        else
+          'Error {
+            message = "expected a string of length at least %{std.string.from_number limit}",
+          }
+      ),
 }

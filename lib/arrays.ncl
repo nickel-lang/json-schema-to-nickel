@@ -1,71 +1,69 @@
 {
-  eager = {
-    ArrayOf
-      | Dyn -> Dyn
-      | doc m%"
-        An eager version of `Array`. `value | ArrayOf C` will succeed if `value` is an array and all of
-        its elements satisfy the contract `C`.
+  ArrayOf
+    | Dyn -> Dyn
+    | doc m%"
+      An eager version of `Array`. `value | ArrayOf C` will succeed if `value` is an array and all of
+      its elements satisfy the contract `C`.
 
-        # Examples
+      # Examples
 
-        ```nickel multiline
-        [1, 2, 3] | ArrayOf Number
-        # => [1, 2, 3]
+      ```nickel multiline
+      [1, 2, 3] | ArrayOf Number
+      # => [1, 2, 3]
 
-        [1, 2, 3] | ArrayOf String
-        # => error
-        ```
-      "%
-      = fun ctr =>
-        std.contract.custom (fun label value =>
-          if !std.is_array value then
-            'Error { message = "expected an array" }
+      [1, 2, 3] | ArrayOf String
+      # => error
+      ```
+    "%
+    = fun ctr =>
+      std.contract.custom (fun label value =>
+        if !std.is_array value then
+          'Error { message = "expected an array" }
+        else
+          value
+          |> std.array.fold_right
+            (fun elt acc =>
+              std.contract.check ctr label elt
+              |> match {
+                'Ok _ => acc,
+                'Error e => 'Error e
+              }
+            )
+            ('Ok value)
+      ),
+
+  Contains
+    | Dyn -> Dyn
+    | doc m%"
+      A contract checking that an array contains something satisfying another contract.
+
+      For example, `contains Number` is a contract checking that the value is an array
+      and that it contains at least one number.
+
+      This is an eager contract, and it assumes that the inputs are also eager.
+      Any lazy parts of the inputs will be ignored.
+
+      # Examples
+
+      ```nickel multiline
+      ["hi", true, 1] | contains Bool
+      # => ["hi", true, 1]
+
+      ["hi", true, 1] | contains (Array Bool)
+      # => error
+      ```
+    "%
+    = fun contract =>
+      std.contract.custom (fun label value =>
+        if !std.is_array value then
+          'Error { message = "expected an array" }
+        else
+          let good_elt = (fun elt => std.contract.check contract label elt |> match { 'Ok _ => true, 'Error _ => false }) in
+          if value |> std.array.any good_elt then
+            'Ok value
           else
-            value
-            |> std.array.fold_right
-              (fun elt acc =>
-                std.contract.check ctr label elt
-                |> match {
-                  'Ok _ => acc,
-                  'Error e => 'Error e
-                }
-              )
-              ('Ok value)
-        ),
-
-    contains
-      | Dyn -> Dyn
-      | doc m%"
-        A contract checking that an array contains something satisfying another contract.
-
-        For example, `contains Number` is a contract checking that the value is an array
-        and that it contains at least one number.
-
-        This is an eager contract, and it assumes that the inputs are also eager.
-        Any lazy parts of the inputs will be ignored.
-
-        # Examples
-
-        ```nickel multiline
-        ["hi", true, 1] | contains Bool
-        # => ["hi", true, 1]
-
-        ["hi", true, 1] | contains (Array Bool)
-        # => error
-        ```
-      "%
-      = fun contract =>
-        std.contract.custom (fun label value =>
-          if !std.is_array value then
-            'Error { message = "expected an array" }
-          else
-            let good_elt = (fun elt => std.contract.check contract label elt |> match { 'Ok _ => true, 'Error _ => false }) in
-            if value |> std.array.any good_elt then
-              'Ok value
-            else
-              'Error { message = "no elements matched" }
-        ),
-  },
+            'Error { message = "no elements matched" }
+      ),
 
   Items
     | Array Dyn -> Dyn -> Dyn

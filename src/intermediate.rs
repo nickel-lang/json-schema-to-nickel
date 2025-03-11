@@ -419,11 +419,6 @@ impl Obj {
                 flavour: nickel_lang_core::typ::DictTypeFlavour::Contract,
             })],
             Obj::Properties(op) => op.to_special_contract(ctx).unwrap_or_else(|| {
-                let f = if ctx.eager {
-                    ctx.js2n("records.eager.record")
-                } else {
-                    ctx.js2n("records.record")
-                };
                 let additional_allowed =
                     !matches!(op.additional_properties.as_deref(), Some(Schema::Never));
                 let additional_contract = match op.additional_properties.as_deref() {
@@ -431,7 +426,7 @@ impl Obj {
                     None => type_contract(TypeF::Dyn),
                 };
                 vec![mk_app!(
-                    f,
+                    ctx.js2n("records.Record"),
                     Term::Record(RecordData::with_field_values(
                         op.properties
                             .iter()
@@ -448,19 +443,19 @@ impl Obj {
             }),
             Obj::MaxProperties(n) => {
                 vec![mk_app!(
-                    ctx.js2n("object.max_properties"),
+                    ctx.js2n("records.MaxProperties"),
                     Term::Num((*n).into())
                 )]
             }
             Obj::MinProperties(n) => {
                 vec![mk_app!(
-                    ctx.js2n("object.min_properties"),
+                    ctx.js2n("records.MinProperties"),
                     Term::Num((*n).into())
                 )]
             }
             Obj::Required(names) => {
                 vec![mk_app!(
-                    ctx.js2n("object.required"),
+                    ctx.js2n("records.Required"),
                     Term::Array(
                         names.iter().map(|s| Term::Str(s.into()).into()).collect(),
                         ArrayAttrs::default()
@@ -469,13 +464,13 @@ impl Obj {
             }
             Obj::PropertyNames(schema) => {
                 vec![mk_app!(
-                    ctx.js2n("object.property_names"),
+                    ctx.js2n("records.PropertyNames"),
                     sequence(schema.to_contract(ctx))
                 )]
             }
             Obj::Dependencies(deps) => {
                 vec![mk_app!(
-                    ctx.js2n("records.dependencies"),
+                    ctx.js2n("records.Dependencies"),
                     Term::Record(RecordData::with_field_values(deps.iter().map(
                         |(key, value)| (
                             LocIdent::from(key),
@@ -644,10 +639,10 @@ impl Str {
         match self {
             Str::Any => type_contract(TypeF::String),
             Str::MaxLength(n) => {
-                mk_app!(ctx.js2n("string.maxLength"), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("string.MaxLength"), Term::Num((*n).into()))
             }
             Str::MinLength(n) => {
-                mk_app!(ctx.js2n("string.minLength"), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("string.MinLength"), Term::Num((*n).into()))
             }
             Str::Pattern(s) => mk_app!(ctx.std("string.Matches"), Term::Str(s.to_owned().into())),
         }
@@ -708,10 +703,7 @@ impl Arr {
             Arr::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
             Arr::AllItems(schema) => {
                 if ctx.eager {
-                    mk_app!(
-                        ctx.js2n("arrays.eager.ArrayOf"),
-                        sequence(schema.to_contract(ctx))
-                    )
+                    mk_app!(ctx.js2n("array.ArrayOf"), sequence(schema.to_contract(ctx)))
                 } else {
                     type_contract(TypeF::Array(Box::new(
                         TypeF::Contract(sequence(schema.to_contract(ctx))).into(),
@@ -722,21 +714,21 @@ impl Arr {
                 let initial = initial.iter().map(|s| sequence(s.to_contract(ctx)));
                 let rest = sequence(rest.to_contract(ctx));
                 mk_app!(
-                    ctx.js2n("arrays.Items"),
+                    ctx.js2n("array.Items"),
                     Term::Array(initial.collect(), ArrayAttrs::default()),
                     rest
                 )
             }
             Arr::MaxItems(n) => {
-                mk_app!(ctx.js2n("arrays.MaxItems"), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("array.MaxItems"), Term::Num((*n).into()))
             }
             Arr::MinItems(n) => {
-                mk_app!(ctx.js2n("arrays.MinItems"), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("array.MinItems"), Term::Num((*n).into()))
             }
-            Arr::UniqueItems => ctx.js2n("arrays.UniqueItems"),
+            Arr::UniqueItems => ctx.js2n("array.UniqueItems"),
             Arr::Contains(schema) => {
                 let contract = sequence(schema.to_contract(ctx.eager()));
-                mk_app!(ctx.js2n("arrays.eager.contains"), contract)
+                mk_app!(ctx.js2n("array.Contains"), contract)
             }
         }
     }
