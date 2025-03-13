@@ -19,70 +19,15 @@
 //! convert it into a lazy Nickel record contract. If that fails, it instead
 //! generates a predicate. In either case, the result is wrapped with the
 //! necessary bindings to the predicate support library and returned.
-pub mod contracts;
 pub mod intermediate;
-pub mod predicates;
 pub mod references;
-pub mod transform;
 pub(crate) mod utils;
 
-use contracts::Contract;
 use nickel_lang_core::{
-    cache::InputFormat,
     cache::{Cache, ErrorTolerance, SourcePath},
     parser::{grammar::TermParser, lexer::Lexer, ErrorTolerantParser},
-    term::{make::let_one_in, RichTerm, Term},
+    term::RichTerm,
 };
-use predicates::Predicate;
-use references::Environment;
-use schemars::schema::RootSchema;
-use std::ffi::OsString;
-
-/// The top-level variable storing the json-schema-to-nickel predicate library included by default
-/// in any generated contract.
-// It would have been nice to do compile-time concatenation instead of inlining MANGLING_PREFIX,
-// but Rust's stdlib doesn't support it, and it's not worth pulling a dependency just for that.
-pub const PREDICATES_LIBRARY_ID: &str = "_js2n__-prdslib";
-
-/// The top-level variable storing the environment, that is the definitions and the properties
-/// referenced in the JSON schema (through the `$ref`) attribute.
-pub const ENVIRONMENT_ID: &str = "_js2n__-refsenv";
-
-/// Mangling prefix used to lower the risk of having clash between variables introduced by
-/// json-schema-to-nickel and actual JSON schema components. This prefix is used in particular to
-/// give (hopefully) unique names to reference pointees appearing in the references environment.
-pub const MANGLING_PREFIX: &str = "_js2n__-";
-
-/// Convert a [`RootSchema`] into a Nickel contract. If the JSON schema is
-/// representable as a lazy record contract, this conversion is preferred.
-/// Otherwise, we fall back to generating a predicate.
-///
-/// If a `path` is provided, the json-schema-to-nickel predicate Nickel library will be imported
-/// from this path. Otherwise, the library will be inlined in the contract, making it standalone.
-pub fn convert(root_schema: &RootSchema, library_path: Option<OsString>) -> RichTerm {
-    let (contract, refs_usage) = Contract::from_root_schema(root_schema).unwrap_or_else(|| {
-        let (predicate, refs_usage) = Predicate::from_root_schema(root_schema);
-        (Contract::from(predicate), refs_usage)
-    });
-
-    let env = Environment::new(root_schema, refs_usage);
-
-    if let Some(path) = library_path {
-        wrap_import_lib(env, contract, path)
-    } else {
-        wrap_inline_lib(env, contract)
-    }
-}
-
-/// Wrap a converted contract in the given environment and inline the predicate library in a
-/// let-binding at the top-level of the wrapped contract.
-pub fn wrap_inline_lib(env: Environment, contract: Contract) -> RichTerm {
-    let_one_in(
-        PREDICATES_LIBRARY_ID,
-        inline_lib(),
-        env.wrap(contract.into()),
-    )
-}
 
 pub fn inline_lib() -> RichTerm {
     let lib_ncl = include_bytes!(concat!(env!("OUT_DIR"), "/main.ncl"));
@@ -96,16 +41,4 @@ pub fn inline_lib() -> RichTerm {
     );
     let lexer = Lexer::new(cache.source(file_id));
     parser.parse_strict(file_id, lexer).unwrap()
-}
-
-/// Import the predicate library in a let-binding at the top-level of a converted contract.
-pub fn wrap_import_lib(env: Environment, contract: Contract, path: OsString) -> RichTerm {
-    let_one_in(
-        PREDICATES_LIBRARY_ID,
-        Term::Import {
-            path,
-            format: InputFormat::Nickel,
-        },
-        env.wrap(contract.into()),
-    )
 }
