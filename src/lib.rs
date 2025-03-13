@@ -21,6 +21,9 @@
 //! necessary bindings to the predicate support library and returned.
 pub mod intermediate;
 pub mod references;
+pub mod schema;
+pub mod traverse;
+pub mod typ;
 pub(crate) mod utils;
 
 use nickel_lang_core::{

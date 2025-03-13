@@ -6,7 +6,6 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashSet},
     ops::DerefMut,
-    str::FromStr,
 };
 
 use miette::miette;
@@ -23,11 +22,13 @@ use nickel_lang_core::{
     typ::{DictTypeFlavour, EnumRowF, EnumRows, EnumRowsF, RecordRows, Type, TypeF},
 };
 use ordered_float::NotNan;
-use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    references::{self, SchemaPointer, SchemaPointerElt},
+    references::{self, References, SchemaPointer, SchemaPointerElt},
+    schema::{Arr, Num, Obj, ObjectProperties, Property, Schema, Str},
+    traverse::Traverse,
+    typ::{InstanceType, InstanceTypeSet},
     utils::{distinct, static_access},
 };
 
@@ -74,168 +75,16 @@ fn eagerly_disjoint<'a>(schemas: impl Iterator<Item = &'a Schema>, refs: &Refere
     true
 }
 
-#[derive(Clone, Debug, Serialize, Hash, PartialEq, Eq)]
-pub enum Schema {
-    Always,
-    Never,
-    Null,
-    Boolean,
-    Const(Value),
-    Enum(Vec<Value>),
-    Object(Obj),
-    String(Str),
-    Number(Num),
-    Array(Arr),
-    Ref(String),
-    AnyOf(Vec<Schema>),
-    OneOf(Vec<Schema>),
-    AllOf(Vec<Schema>),
-    Ite {
-        iph: Box<Schema>,
-        then: Box<Schema>,
-        els: Box<Schema>,
-    },
-    Not(Box<Schema>),
-}
+fn dict_contract(elt_schema: &Schema, ctx: ContractContext) -> RichTerm {
+    let elt_contract = elt_schema.to_contract(ctx);
 
-fn apparent_type(value: &Value) -> InstanceType {
-    match value {
-        Value::Null => InstanceType::Null,
-        Value::Bool(_) => InstanceType::Boolean,
-        Value::Number(_) => InstanceType::Number,
-        Value::String(_) => InstanceType::String,
-        Value::Array(_) => InstanceType::Array,
-        Value::Object(_) => InstanceType::Object,
-    }
-}
-
-fn apparent_types<'a>(values: impl IntoIterator<Item = &'a Value>) -> InstanceTypeSet {
-    values.into_iter().map(apparent_type).collect()
+    type_contract(TypeF::Dict {
+        type_fields: Box::new(TypeF::Contract(sequence(elt_contract)).into()),
+        flavour: DictTypeFlavour::Contract,
+    })
 }
 
 impl Schema {
-    pub fn simple_type(&self, refs: &References) -> Option<InstanceType> {
-        fn simple_type_rec<'s>(slf: &'s Schema, refs: &'s References) -> Option<InstanceType> {
-            match slf {
-                Schema::Always => None,
-                Schema::Never => None,
-                Schema::Null => Some(InstanceType::Null),
-                Schema::Boolean => Some(InstanceType::Boolean),
-                Schema::Const(v) => Some(apparent_type(v)),
-                Schema::Enum(vs) => {
-                    if let Some(ty) = vs.first().map(apparent_type) {
-                        vs.iter().map(apparent_type).all(|u| u == ty).then_some(ty)
-                    } else {
-                        None
-                    }
-                }
-                Schema::Object(_) => Some(InstanceType::Object),
-                Schema::String(_) => Some(InstanceType::String),
-                Schema::Number(_) => Some(InstanceType::Number),
-                Schema::Array(_) => Some(InstanceType::Array),
-                Schema::Ref(r) => refs.get(r).and_then(|s| simple_type_rec(&s, refs)),
-                Schema::AnyOf(_) => None,
-                Schema::OneOf(_) => None,
-                Schema::AllOf(schemas) => {
-                    let mut intersection = InstanceTypeSet::FULL;
-                    for s in schemas {
-                        intersection = intersection.intersect(s.allowed_types_shallow(refs));
-                    }
-                    intersection.to_singleton()
-                }
-                Schema::Ite { els, .. } => els.simple_type(refs),
-                Schema::Not(_) => None,
-            }
-        }
-
-        simple_type_rec(self, refs)
-    }
-
-    pub fn just_type(&self) -> Option<InstanceType> {
-        match self {
-            Schema::Null => Some(InstanceType::Null),
-            Schema::Boolean => Some(InstanceType::Boolean),
-            Schema::Object(Obj::Any) => Some(InstanceType::Object),
-            Schema::Array(Arr::Any) => Some(InstanceType::Array),
-            Schema::String(Str::Any) => Some(InstanceType::String),
-            Schema::Number(Num::Any) => Some(InstanceType::Number),
-            _ => None,
-        }
-    }
-
-    pub fn just_type_set(&self) -> Option<InstanceTypeSet> {
-        if let Some(ty) = self.just_type() {
-            Some(InstanceTypeSet::singleton(ty))
-        } else if let Schema::AnyOf(schemas) = self {
-            schemas.iter().map(|s| s.just_type()).collect()
-        } else {
-            None
-        }
-    }
-
-    pub fn allowed_types_shallow(&self, refs: &References) -> InstanceTypeSet {
-        match self {
-            Schema::Always => InstanceTypeSet::FULL,
-            Schema::Never => InstanceTypeSet::EMPTY,
-            Schema::Null => InstanceTypeSet::singleton(InstanceType::Null),
-            Schema::Boolean => InstanceTypeSet::singleton(InstanceType::Boolean),
-            Schema::Const(v) => InstanceTypeSet::singleton(apparent_type(v)),
-            Schema::Enum(vs) => apparent_types(vs),
-            Schema::Object(_) => InstanceTypeSet::singleton(InstanceType::Object),
-            Schema::String(_) => InstanceTypeSet::singleton(InstanceType::String),
-            Schema::Number(_) => InstanceTypeSet::singleton(InstanceType::Number),
-            Schema::Array(_) => InstanceTypeSet::singleton(InstanceType::Array),
-            Schema::Ref(name) => refs
-                .get(name)
-                .map(|s| s.allowed_types_shallow(refs))
-                .unwrap_or(InstanceTypeSet::FULL),
-            Schema::AnyOf(vec) => vec
-                .iter()
-                .map(|s| s.simple_type(refs))
-                .collect::<Option<InstanceTypeSet>>()
-                .unwrap_or(InstanceTypeSet::FULL),
-            Schema::OneOf(_) => InstanceTypeSet::FULL,
-            Schema::AllOf(_) => InstanceTypeSet::FULL,
-            Schema::Ite { .. } => InstanceTypeSet::FULL,
-            Schema::Not(_) => InstanceTypeSet::FULL,
-        }
-    }
-
-    // TODO: may be worth memoizing something
-    pub fn allowed_types(&self, refs: &References) -> InstanceTypeSet {
-        match self {
-            Schema::Always => InstanceTypeSet::FULL,
-            Schema::Never => InstanceTypeSet::EMPTY,
-            Schema::Null => InstanceTypeSet::singleton(InstanceType::Null),
-            Schema::Boolean => InstanceTypeSet::singleton(InstanceType::Boolean),
-            Schema::Const(v) => InstanceTypeSet::singleton(apparent_type(v)),
-            Schema::Enum(vs) => apparent_types(vs),
-            Schema::Object(_) => InstanceTypeSet::singleton(InstanceType::Object),
-            Schema::String(_) => InstanceTypeSet::singleton(InstanceType::String),
-            Schema::Number(_) => InstanceTypeSet::singleton(InstanceType::Number),
-            Schema::Array(_) => InstanceTypeSet::singleton(InstanceType::Array),
-            Schema::Ref(name) => refs
-                .get(name)
-                .map(|s| s.allowed_types(refs))
-                .unwrap_or(InstanceTypeSet::FULL),
-            Schema::AnyOf(vec) => vec
-                .iter()
-                .map(|s| s.simple_type(refs))
-                .collect::<Option<InstanceTypeSet>>()
-                .unwrap_or(InstanceTypeSet::FULL),
-            Schema::OneOf(_) => InstanceTypeSet::FULL,
-            Schema::AllOf(vec) => {
-                let mut intersection = InstanceTypeSet::FULL;
-                for s in vec {
-                    intersection = intersection.intersect(s.allowed_types(refs));
-                }
-                intersection
-            }
-            Schema::Ite { .. } => InstanceTypeSet::FULL,
-            Schema::Not(_) => InstanceTypeSet::FULL,
-        }
-    }
-
     pub fn to_contract(&self, ctx: ContractContext) -> Vec<RichTerm> {
         match self {
             Schema::Always => vec![ctx.js2n("Always")],
@@ -321,74 +170,165 @@ impl Schema {
             }
         }
     }
+}
 
-    pub fn is_always_eager(&self, refs: &References) -> bool {
-        match self {
-            Schema::Always
-            | Schema::Never
-            | Schema::Null
-            | Schema::Boolean
-            | Schema::Const(_)
-            | Schema::Enum(_)
-            | Schema::String(_)
-            | Schema::Number(_) => true,
-            Schema::Ref(r) => refs.get(r).is_none_or(|s| s.is_always_eager(refs)),
-            Schema::Object(obj) => match obj {
-                Obj::Any
-                | Obj::MaxProperties(_)
-                | Obj::MinProperties(_)
-                | Obj::Required(_)
-                | Obj::PropertyNames(_)
-                | Obj::DependentFields(_) => true,
-                Obj::Properties(props) => {
-                    props
-                        .properties
-                        .values()
-                        .all(|p| p.schema.is_always_eager(refs))
-                        && props
-                            .pattern_properties
-                            .values()
-                            .all(|s| s.is_always_eager(refs))
-                        && props
-                            .additional_properties
-                            .as_ref()
-                            .is_none_or(|s| s.is_always_eager(refs))
-                }
-                Obj::DependentSchemas(deps) => deps.values().all(|s| s.is_always_eager(refs)),
-            },
-            Schema::Array(arr) => match arr {
-                Arr::Any
-                | Arr::MaxItems(_)
-                | Arr::MinItems(_)
-                | Arr::UniqueItems
-                | Arr::Contains(_) => true,
-                Arr::AllItems(schema) => schema.is_always_eager(refs),
-                Arr::PerItem { initial, rest } => {
-                    initial.iter().all(|s| s.is_always_eager(refs)) && rest.is_always_eager(refs)
-                }
-            },
-            Schema::AnyOf(vec) | Schema::OneOf(vec) | Schema::AllOf(vec) => {
-                vec.iter().all(|s| s.is_always_eager(refs))
+impl ObjectProperties {
+    pub fn to_special_contract(&self, ctx: ContractContext) -> Option<Vec<RichTerm>> {
+        let trivial_additional = matches!(
+            self.additional_properties.as_deref(),
+            None | Some(Schema::Always) | Some(Schema::Never)
+        );
+        let no_additional = self.additional_properties.as_deref() == Some(&Schema::Never);
+        if self.pattern_properties.is_empty() && trivial_additional && !ctx.eager {
+            // A normal record contract, which may or may not be open. If all the element contracts
+            // are trivial, this will even be an eager contract.
+            let open = matches!(
+                self.additional_properties.as_deref(),
+                None | Some(Schema::Always)
+            );
+
+            let fields = self.properties.iter().map(|(name, prop)| {
+                (
+                    name.into(),
+                    Field {
+                        metadata: FieldMetadata {
+                            annotation: TypeAnnotation {
+                                typ: None,
+                                contracts: prop
+                                    .schema
+                                    .to_contract(ctx)
+                                    .into_iter()
+                                    .map(|c| LabeledType {
+                                        typ: TypeF::Contract(c).into(),
+                                        label: Label::dummy(),
+                                    })
+                                    .collect(),
+                            },
+                            opt: prop.optional,
+                            doc: prop.doc.clone(),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                )
+            });
+
+            Some(vec![Term::Record(RecordData {
+                fields: fields.collect(),
+                attrs: RecordAttrs {
+                    open,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .into()])
+        } else if self.properties.is_empty()
+            && self.pattern_properties.is_empty()
+            && (!ctx.eager || trivial_additional)
+        {
+            // No properties were specified, just a contract on the additional
+            // properties. We mostly treat this as a dict, but if additional
+            // properties are forbidden we treat it as an empty record.
+            if no_additional {
+                Some(vec![Term::Record(RecordData::default()).into()])
+            } else {
+                let additional_properties = self
+                    .additional_properties
+                    .as_deref()
+                    .unwrap_or(&Schema::Always);
+                Some(vec![dict_contract(additional_properties, ctx)])
             }
-            Schema::Ite { iph, then, els } => {
-                iph.is_always_eager(refs) && then.is_always_eager(refs) && els.is_always_eager(refs)
-            }
-            Schema::Not(schema) => schema.is_always_eager(refs),
+        } else if self.properties.is_empty()
+            && self.pattern_properties.len() == 1
+            && no_additional
+            && (!ctx.eager
+                || self
+                    .pattern_properties
+                    .values()
+                    .all(|s| s == &Schema::Always))
+        {
+            // unwrap: we checked for length 1
+            let (pattern, schema) = self.pattern_properties.iter().next().unwrap();
+            let dict = dict_contract(schema, ctx);
+            let names = mk_app!(
+                ctx.js2n("record.FieldsMatch"),
+                Term::Str(pattern.to_owned().into())
+            );
+            Some(vec![dict, names])
+        } else {
+            None
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub enum Obj {
-    Any,
-    Properties(ObjectProperties),
-    MaxProperties(u64),
-    MinProperties(u64),
-    Required(BTreeSet<String>),
-    // This could be simplified maybe, because we're guaranteed that this will only need to validate strings.
-    PropertyNames(Box<Schema>),
-    DependentFields(BTreeMap<String, Vec<String>>),
-    DependentSchemas(BTreeMap<String, Schema>),
+impl Str {
+    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
+        match self {
+            Str::Any => type_contract(TypeF::String),
+            Str::MaxLength(n) => {
+                mk_app!(ctx.js2n("string.MaxLength"), Term::Num((*n).into()))
+            }
+            Str::MinLength(n) => {
+                mk_app!(ctx.js2n("string.MinLength"), Term::Num((*n).into()))
+            }
+            Str::Pattern(s) => mk_app!(ctx.js2n("string.Matches"), Term::Str(s.to_owned().into())),
+        }
+    }
+}
+
+impl Num {
+    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
+        match self {
+            Num::Any => type_contract(TypeF::Number),
+            Num::MultipleOf(x) => mk_app!(ctx.js2n("number.MultipleOf"), num(*x)),
+            Num::Maximum(x) => mk_app!(ctx.js2n("number.Maximum"), num(*x)),
+            Num::Minimum(x) => mk_app!(ctx.js2n("number.Minimum"), num(*x)),
+            Num::ExclusiveMinimum(x) => {
+                mk_app!(ctx.js2n("number.ExclusiveMinimum"), num(*x))
+            }
+            Num::ExclusiveMaximum(x) => {
+                mk_app!(ctx.js2n("number.ExclusiveMaximum"), num(*x))
+            }
+            Num::Integer => ctx.std("number.Integer"),
+        }
+    }
+}
+
+impl Arr {
+    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
+        match self {
+            Arr::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
+            Arr::AllItems(schema) => {
+                if ctx.eager {
+                    mk_app!(ctx.js2n("array.ArrayOf"), sequence(schema.to_contract(ctx)))
+                } else {
+                    type_contract(TypeF::Array(Box::new(
+                        TypeF::Contract(sequence(schema.to_contract(ctx))).into(),
+                    )))
+                }
+            }
+            Arr::PerItem { initial, rest } => {
+                let initial = initial.iter().map(|s| sequence(s.to_contract(ctx)));
+                let rest = sequence(rest.to_contract(ctx));
+                mk_app!(
+                    ctx.js2n("array.Items"),
+                    Term::Array(initial.collect(), ArrayAttrs::default()),
+                    rest
+                )
+            }
+            Arr::MaxItems(n) => {
+                mk_app!(ctx.js2n("array.MaxItems"), Term::Num((*n).into()))
+            }
+            Arr::MinItems(n) => {
+                mk_app!(ctx.js2n("array.MinItems"), Term::Num((*n).into()))
+            }
+            Arr::UniqueItems => ctx.js2n("array.UniqueItems"),
+            Arr::Contains(schema) => {
+                let contract = sequence(schema.to_contract(ctx.eager()));
+                mk_app!(ctx.js2n("array.Contains"), contract)
+            }
+        }
+    }
 }
 
 impl Obj {
@@ -496,351 +436,6 @@ impl Obj {
                 )]
             }
         }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub struct Property {
-    doc: Option<String>,
-    schema: Schema,
-    optional: bool,
-}
-
-impl From<Schema> for Property {
-    fn from(s: Schema) -> Self {
-        Property {
-            doc: None,
-            schema: s,
-            optional: true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub struct ObjectProperties {
-    pub properties: BTreeMap<String, Property>,
-    pub pattern_properties: BTreeMap<String, Schema>,
-    pub additional_properties: Option<Box<Schema>>,
-}
-
-impl ObjectProperties {
-    pub fn to_special_contract(&self, ctx: ContractContext) -> Option<Vec<RichTerm>> {
-        let trivial_additional = matches!(
-            self.additional_properties.as_deref(),
-            None | Some(Schema::Always) | Some(Schema::Never)
-        );
-        let no_additional = self.additional_properties.as_deref() == Some(&Schema::Never);
-        if self.pattern_properties.is_empty() && trivial_additional && !ctx.eager {
-            // A normal record contract, which may or may not be open. If all the element contracts
-            // are trivial, this will even be an eager contract.
-            let open = matches!(
-                self.additional_properties.as_deref(),
-                None | Some(Schema::Always)
-            );
-
-            let fields = self.properties.iter().map(|(name, prop)| {
-                (
-                    name.into(),
-                    Field {
-                        metadata: FieldMetadata {
-                            annotation: TypeAnnotation {
-                                typ: None,
-                                contracts: prop
-                                    .schema
-                                    .to_contract(ctx)
-                                    .into_iter()
-                                    .map(|c| LabeledType {
-                                        typ: TypeF::Contract(c).into(),
-                                        label: Label::dummy(),
-                                    })
-                                    .collect(),
-                            },
-                            opt: prop.optional,
-                            doc: prop.doc.clone(),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                )
-            });
-
-            Some(vec![Term::Record(RecordData {
-                fields: fields.collect(),
-                attrs: RecordAttrs {
-                    open,
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .into()])
-        } else if self.properties.is_empty()
-            && self.pattern_properties.is_empty()
-            && (!ctx.eager || trivial_additional)
-        {
-            // No properties were specified, just a contract on the additional
-            // properties. We mostly treat this as a dict, but if additional
-            // properties are forbidden we treat it as an empty record.
-            if no_additional {
-                Some(vec![Term::Record(RecordData::default()).into()])
-            } else {
-                let additional_properties = self
-                    .additional_properties
-                    .as_deref()
-                    .unwrap_or(&Schema::Always);
-                Some(vec![dict_contract(additional_properties, ctx)])
-            }
-        } else if self.properties.is_empty()
-            && self.pattern_properties.len() == 1
-            && no_additional
-            && (!ctx.eager
-                || self
-                    .pattern_properties
-                    .values()
-                    .all(|s| s == &Schema::Always))
-        {
-            // unwrap: we checked for length 1
-            let (pattern, schema) = self.pattern_properties.iter().next().unwrap();
-            let dict = dict_contract(schema, ctx);
-            let names = mk_app!(
-                ctx.js2n("record.FieldsMatch"),
-                Term::Str(pattern.to_owned().into())
-            );
-            Some(vec![dict, names])
-        } else {
-            None
-        }
-    }
-}
-
-fn dict_contract(elt_schema: &Schema, ctx: ContractContext) -> RichTerm {
-    let elt_contract = elt_schema.to_contract(ctx);
-
-    type_contract(TypeF::Dict {
-        type_fields: Box::new(TypeF::Contract(sequence(elt_contract)).into()),
-        flavour: DictTypeFlavour::Contract,
-    })
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub enum Dependency {
-    Array(Vec<String>),
-    Schema(Schema),
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub enum Str {
-    Any,
-    MaxLength(u64),
-    MinLength(u64),
-    Pattern(String),
-}
-
-impl Str {
-    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
-        match self {
-            Str::Any => type_contract(TypeF::String),
-            Str::MaxLength(n) => {
-                mk_app!(ctx.js2n("string.MaxLength"), Term::Num((*n).into()))
-            }
-            Str::MinLength(n) => {
-                mk_app!(ctx.js2n("string.MinLength"), Term::Num((*n).into()))
-            }
-            Str::Pattern(s) => mk_app!(ctx.js2n("string.Matches"), Term::Str(s.to_owned().into())),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub enum Num {
-    Any,
-    // The json-schema reference doesn't say this has to be an integer (and
-    // if it isn't an integer it doesn't specify how rounding is supposed to
-    // be handled).
-    MultipleOf(NotNan<f64>),
-    Maximum(NotNan<f64>),
-    Minimum(NotNan<f64>),
-    ExclusiveMinimum(NotNan<f64>),
-    ExclusiveMaximum(NotNan<f64>),
-    Integer,
-}
-
-impl Num {
-    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
-        match self {
-            Num::Any => type_contract(TypeF::Number),
-            Num::MultipleOf(x) => mk_app!(ctx.js2n("number.MultipleOf"), num(*x)),
-            Num::Maximum(x) => mk_app!(ctx.js2n("number.Maximum"), num(*x)),
-            Num::Minimum(x) => mk_app!(ctx.js2n("number.Minimum"), num(*x)),
-            Num::ExclusiveMinimum(x) => {
-                mk_app!(ctx.js2n("number.ExclusiveMinimum"), num(*x))
-            }
-            Num::ExclusiveMaximum(x) => {
-                mk_app!(ctx.js2n("number.ExclusiveMaximum"), num(*x))
-            }
-            Num::Integer => ctx.std("number.Integer"),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub enum Arr {
-    Any,
-    AllItems(Box<Schema>),
-    PerItem {
-        initial: Vec<Schema>,
-        rest: Box<Schema>,
-    },
-    MaxItems(u64),
-    MinItems(u64),
-    UniqueItems,
-    Contains(Box<Schema>),
-}
-
-impl Arr {
-    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
-        match self {
-            Arr::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
-            Arr::AllItems(schema) => {
-                if ctx.eager {
-                    mk_app!(ctx.js2n("array.ArrayOf"), sequence(schema.to_contract(ctx)))
-                } else {
-                    type_contract(TypeF::Array(Box::new(
-                        TypeF::Contract(sequence(schema.to_contract(ctx))).into(),
-                    )))
-                }
-            }
-            Arr::PerItem { initial, rest } => {
-                let initial = initial.iter().map(|s| sequence(s.to_contract(ctx)));
-                let rest = sequence(rest.to_contract(ctx));
-                mk_app!(
-                    ctx.js2n("array.Items"),
-                    Term::Array(initial.collect(), ArrayAttrs::default()),
-                    rest
-                )
-            }
-            Arr::MaxItems(n) => {
-                mk_app!(ctx.js2n("array.MaxItems"), Term::Num((*n).into()))
-            }
-            Arr::MinItems(n) => {
-                mk_app!(ctx.js2n("array.MinItems"), Term::Num((*n).into()))
-            }
-            Arr::UniqueItems => ctx.js2n("array.UniqueItems"),
-            Arr::Contains(schema) => {
-                let contract = sequence(schema.to_contract(ctx.eager()));
-                mk_app!(ctx.js2n("array.Contains"), contract)
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(u8)]
-pub enum InstanceType {
-    Null = 0,
-    Boolean,
-    Object,
-    Array,
-    Number,
-    String,
-}
-
-impl InstanceType {
-    pub fn all() -> [InstanceType; 6] {
-        use InstanceType::*;
-        [Null, Boolean, Object, Array, Number, String]
-    }
-
-    pub fn to_schema(self) -> Schema {
-        match self {
-            InstanceType::Null => Schema::Null,
-            InstanceType::Boolean => Schema::Boolean,
-            InstanceType::Object => Schema::Object(Obj::Any),
-            InstanceType::Array => Schema::Array(Arr::Any),
-            InstanceType::Number => Schema::Number(Num::Any),
-            InstanceType::String => Schema::String(Str::Any),
-        }
-    }
-}
-
-impl FromStr for InstanceType {
-    type Err = miette::Report;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let ty = match s {
-            "null" => InstanceType::Null,
-            "boolean" => InstanceType::Boolean,
-            "object" => InstanceType::Object,
-            "array" => InstanceType::Array,
-            "integer" => InstanceType::Number,
-            "number" => InstanceType::Number,
-            "string" => InstanceType::String,
-            s => miette::bail!("unknown instance type `{s}`"),
-        };
-        Ok(ty)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct InstanceTypeSet {
-    inner: u8,
-}
-
-impl InstanceTypeSet {
-    const FULL: InstanceTypeSet = InstanceTypeSet { inner: 0b0011_1111 };
-    const EMPTY: InstanceTypeSet = InstanceTypeSet { inner: 0b0000_0000 };
-
-    pub fn singleton(ty: InstanceType) -> Self {
-        Self {
-            inner: 1 << ty as u8,
-        }
-    }
-
-    pub fn insert(&mut self, ty: InstanceType) {
-        self.inner |= 1 << ty as u8;
-    }
-
-    pub fn contains(self, ty: InstanceType) -> bool {
-        self.inner & (1 << ty as u8) != 0
-    }
-
-    pub fn intersect(self, other: InstanceTypeSet) -> InstanceTypeSet {
-        InstanceTypeSet {
-            inner: self.inner & other.inner,
-        }
-    }
-
-    pub fn to_schema(self) -> Schema {
-        let types: Vec<_> = InstanceType::all()
-            .into_iter()
-            .filter(|ty| self.contains(*ty))
-            .collect();
-
-        match types.as_slice() {
-            [] => Schema::Never,
-            [ty] => ty.to_schema(),
-            _ => Schema::AnyOf(types.into_iter().map(InstanceType::to_schema).collect()),
-        }
-    }
-
-    pub fn to_singleton(self) -> Option<InstanceType> {
-        if self.inner.count_ones() == 1 {
-            InstanceType::all()
-                .iter()
-                .find(|ty| self.contains(**ty))
-                .copied()
-        } else {
-            None
-        }
-    }
-}
-
-impl FromIterator<InstanceType> for InstanceTypeSet {
-    fn from_iter<T: IntoIterator<Item = InstanceType>>(iter: T) -> Self {
-        let mut ret = InstanceTypeSet::EMPTY;
-        for ty in iter.into_iter() {
-            ret.insert(ty);
-        }
-        ret
     }
 }
 
@@ -1278,144 +873,6 @@ fn extract_array_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>
     }
 
     Ok(ret)
-}
-
-trait Traverse<T>: Sized {
-    fn traverse<F>(self, f: &mut F) -> Self
-    where
-        F: FnMut(T) -> T;
-}
-
-impl Traverse<Schema> for Schema {
-    fn traverse<F>(self, f: &mut F) -> Self
-    where
-        F: FnMut(Schema) -> Schema,
-    {
-        let val = match self {
-            Schema::Always
-            | Schema::Never
-            | Schema::Null
-            | Schema::Boolean
-            | Schema::Const(_)
-            | Schema::Enum(_)
-            | Schema::Number(_)
-            | Schema::String(_)
-            | Schema::Ref(_) => self,
-            Schema::Object(obj) => Schema::Object(obj.traverse(f)),
-            Schema::Array(arr) => Schema::Array(arr.traverse(f)),
-            Schema::AnyOf(vec) => Schema::AnyOf(vec.traverse(f)),
-            Schema::OneOf(vec) => Schema::OneOf(vec.traverse(f)),
-            Schema::AllOf(vec) => Schema::AllOf(vec.traverse(f)),
-            Schema::Ite { iph, then, els } => Schema::Ite {
-                iph: iph.traverse(f),
-                then: then.traverse(f),
-                els: els.traverse(f),
-            },
-            Schema::Not(schema) => Schema::Not(schema.traverse(f)),
-        };
-
-        f(val)
-    }
-}
-
-impl<S, T: Traverse<S>> Traverse<S> for Box<T> {
-    fn traverse<F>(self, f: &mut F) -> Self
-    where
-        F: FnMut(S) -> S,
-    {
-        Box::new((*self).traverse(f))
-    }
-}
-
-impl<S, T: Traverse<S>> Traverse<S> for Option<T> {
-    fn traverse<F>(self, f: &mut F) -> Self
-    where
-        F: FnMut(S) -> S,
-    {
-        self.map(|v| v.traverse(f))
-    }
-}
-
-impl<S, T: Traverse<S>> Traverse<S> for Vec<T> {
-    fn traverse<F>(self, f: &mut F) -> Self
-    where
-        F: FnMut(S) -> S,
-    {
-        self.into_iter().map(|x| x.traverse(f)).collect()
-    }
-}
-
-impl<K: Ord + Eq, S, T: Traverse<S>> Traverse<S> for BTreeMap<K, T> {
-    fn traverse<F>(self, f: &mut F) -> Self
-    where
-        F: FnMut(S) -> S,
-    {
-        self.into_iter().map(|(k, v)| (k, v.traverse(f))).collect()
-    }
-}
-
-impl Traverse<Schema> for Property {
-    fn traverse<F>(self, f: &mut F) -> Self
-    where
-        F: FnMut(Schema) -> Schema,
-    {
-        Property {
-            doc: self.doc,
-            optional: self.optional,
-            schema: self.schema.traverse(f),
-        }
-    }
-}
-
-impl Traverse<Schema> for Obj {
-    fn traverse<F>(self, f: &mut F) -> Self
-    where
-        F: FnMut(Schema) -> Schema,
-    {
-        match self {
-            Obj::Any
-            | Obj::MaxProperties(_)
-            | Obj::MinProperties(_)
-            | Obj::Required(_)
-            | Obj::DependentFields(_) => self,
-            Obj::PropertyNames(schema) => Obj::PropertyNames(schema.traverse(f)),
-            Obj::DependentSchemas(deps) => Obj::DependentSchemas(deps.traverse(f)),
-            Obj::Properties(props) => Obj::Properties(ObjectProperties {
-                properties: props.properties.traverse(f),
-                pattern_properties: props.pattern_properties.traverse(f),
-                additional_properties: props.additional_properties.traverse(f),
-            }),
-        }
-    }
-}
-
-impl Traverse<Schema> for Dependency {
-    fn traverse<F>(self, f: &mut F) -> Self
-    where
-        F: FnMut(Schema) -> Schema,
-    {
-        match self {
-            Dependency::Array(_) => self,
-            Dependency::Schema(schema) => Dependency::Schema(schema.traverse(f)),
-        }
-    }
-}
-
-impl Traverse<Schema> for Arr {
-    fn traverse<F>(self, f: &mut F) -> Self
-    where
-        F: FnMut(Schema) -> Schema,
-    {
-        match self {
-            Arr::Any | Arr::MaxItems(_) | Arr::MinItems(_) | Arr::UniqueItems => self,
-            Arr::AllItems(schema) => Arr::AllItems(schema.traverse(f)),
-            Arr::PerItem { initial, rest } => Arr::PerItem {
-                initial: initial.traverse(f),
-                rest: rest.traverse(f),
-            },
-            Arr::Contains(schema) => Arr::Contains(schema.traverse(f)),
-        }
-    }
 }
 
 pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, BTreeMap<String, Schema>) {
@@ -1874,55 +1331,6 @@ pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schem
     schema.traverse(&mut enumerate_one)
 }
 
-pub struct RefGuard<'b, 'a: 'b> {
-    refs: &'b References<'a>,
-    name: &'b str,
-    schema: &'b Schema,
-}
-
-impl<'b, 'a: 'b> Drop for RefGuard<'b, 'a> {
-    fn drop(&mut self) {
-        self.refs.blackholed.borrow_mut().remove(self.name);
-    }
-}
-
-impl<'b, 'a: 'b> std::ops::Deref for RefGuard<'b, 'a> {
-    type Target = Schema;
-
-    fn deref(&self) -> &Self::Target {
-        self.schema
-    }
-}
-
-pub struct References<'a> {
-    inner: &'a BTreeMap<String, Schema>,
-    blackholed: RefCell<HashSet<&'a str>>,
-}
-
-impl<'a> References<'a> {
-    pub fn new(inner: &'a BTreeMap<String, Schema>) -> Self {
-        References {
-            inner,
-            blackholed: RefCell::new(HashSet::new()),
-        }
-    }
-
-    fn get<'b>(&'b self, name: &'b str) -> Option<RefGuard<'b, 'a>> {
-        if self.blackholed.borrow().contains(name) {
-            None
-        } else {
-            self.inner.get_key_value(name).map(|(stored_name, s)| {
-                self.blackholed.borrow_mut().insert(stored_name);
-                RefGuard {
-                    refs: self,
-                    name,
-                    schema: s,
-                }
-            })
-        }
-    }
-}
-
 fn all_shadowed_names(s: Schema) -> (Schema, HashSet<String>) {
     let mut ret = HashSet::new();
     let mut shadowed = |s: Schema| -> Schema {
@@ -2044,9 +1452,8 @@ pub fn to_nickel(s: Schema, refs: &References, import_term: RichTerm) -> RichTer
     let lib_name = no_collisions_name(&shadowed_names, "js2n");
 
     let always_eager = refs
-        .inner
         .iter()
-        .map(|(name, schema)| (name.as_str(), schema.is_always_eager(refs)))
+        .map(|(name, schema)| (name, schema.is_always_eager(refs)))
         .collect();
     let accessed_refs = RefCell::new(BTreeSet::new());
 
@@ -2070,7 +1477,7 @@ pub fn to_nickel(s: Schema, refs: &References, import_term: RichTerm) -> RichTer
             // unwrap: the context shouldn't collect missing references
             refs_env.insert(
                 names.join("."),
-                sequence(refs.inner[&name].to_contract(ctx)),
+                sequence(refs.get(&name).unwrap().to_contract(ctx)),
             );
         }
 

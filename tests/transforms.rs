@@ -1,5 +1,9 @@
 use insta::assert_ron_snapshot;
-use json_schema_to_nickel::intermediate::{self, inline_refs, simplify, References};
+use json_schema_to_nickel::{
+    intermediate::{self, inline_refs, simplify},
+    references::References,
+    schema::Schema,
+};
 use libtest_mimic::{Arguments, Trial};
 use std::{path::Path, process::ExitCode};
 
@@ -27,7 +31,7 @@ fn snapshot_ir(path: &Path, name: &str) {
     // TODO: allow the test input to customize the transforms that get applied
     let file = std::fs::read_to_string(path).unwrap();
     let val: serde_json::Value = serde_json::from_str(&file).unwrap();
-    let schema: intermediate::Schema = (&val).try_into().unwrap();
+    let schema: Schema = (&val).try_into().unwrap();
 
     let (schema, all_refs) = intermediate::resolve_references_recursive(&val, schema);
     let refs = References::new(&all_refs);

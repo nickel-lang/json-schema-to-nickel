@@ -29,11 +29,19 @@
 //!
 //! At the end, we can elaborate the required special values like `___nickel_defs` and only include
 //! the actually used in the final contract, to avoid bloating the result.
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashSet},
+};
+
 use fluent_uri;
 
 use nickel_lang_core::term::RichTerm;
 
-use crate::utils::{decode_json_ptr_part, static_access};
+use crate::{
+    schema::Schema,
+    utils::{decode_json_ptr_part, static_access},
+};
 
 /// A representation of a field path in the final generated contract.
 ///
@@ -352,5 +360,60 @@ pub fn resolve_ptr(reference: &str) -> Option<SchemaPointer> {
 
             None
         }
+    }
+}
+
+pub struct RefGuard<'b, 'a: 'b> {
+    refs: &'b References<'a>,
+    name: &'b str,
+    schema: &'b Schema,
+}
+
+impl<'b, 'a: 'b> Drop for RefGuard<'b, 'a> {
+    fn drop(&mut self) {
+        self.refs.blackholed.borrow_mut().remove(self.name);
+    }
+}
+
+impl<'b, 'a: 'b> std::ops::Deref for RefGuard<'b, 'a> {
+    type Target = Schema;
+
+    fn deref(&self) -> &Self::Target {
+        self.schema
+    }
+}
+
+pub struct References<'a> {
+    inner: &'a BTreeMap<String, Schema>,
+    blackholed: RefCell<HashSet<&'a str>>,
+}
+
+impl<'a> References<'a> {
+    pub fn new(inner: &'a BTreeMap<String, Schema>) -> Self {
+        References {
+            inner,
+            blackholed: RefCell::new(HashSet::new()),
+        }
+    }
+
+    pub fn get<'b>(&'b self, name: &'b str) -> Option<RefGuard<'b, 'a>> {
+        if self.blackholed.borrow().contains(name) {
+            None
+        } else {
+            self.inner.get_key_value(name).map(|(stored_name, s)| {
+                self.blackholed.borrow_mut().insert(stored_name);
+                RefGuard {
+                    refs: self,
+                    name,
+                    schema: s,
+                }
+            })
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Schema)> {
+        self.inner
+            .iter()
+            .map(|(name, schema)| (name.as_str(), schema))
     }
 }
