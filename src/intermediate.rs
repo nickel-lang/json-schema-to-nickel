@@ -1,12 +1,10 @@
 // TODO;
 // - in the github example, why doesn't the {_ | Dyn} in services get removed?
 // - simplify types in if/then expressions without an else
-// - rewrite the contracts library
 
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashSet},
-    convert::Infallible,
     ops::DerefMut,
     str::FromStr,
 };
@@ -32,23 +30,6 @@ use crate::{
     references::{self, SchemaPointer, SchemaPointerElt},
     utils::{distinct, static_access},
 };
-
-// See https://github.com/orgs/json-schema-org/discussions/526#discussioncomment-7559030
-// regarding the semantics of $ref in an object with other fields. Basically, we should interpret
-//
-// {
-//   "$ref": "#foo",
-//   "properties": ...
-// }
-//
-// as
-//
-// {
-//   "allOf": [
-//     { "$ref": "#foo" },
-//     { "properties": ... }
-//   ]
-// }
 
 fn type_contract(ty: TypeF<Box<Type>, RecordRows, EnumRows, RichTerm>) -> RichTerm {
     Term::Type {
@@ -1299,29 +1280,18 @@ fn extract_array_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>
     Ok(ret)
 }
 
-#[derive(Copy, Clone, PartialEq)]
-enum TraverseOrder {
-    TopDown,
-    BottomUp,
-}
-
 trait Traverse<T>: Sized {
-    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    fn traverse<F>(self, f: &mut F) -> Self
     where
-        F: FnMut(T) -> Result<T, E>;
+        F: FnMut(T) -> T;
 }
 
 impl Traverse<Schema> for Schema {
-    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    fn traverse<F>(self, f: &mut F) -> Self
     where
-        F: FnMut(Schema) -> Result<Schema, E>,
+        F: FnMut(Schema) -> Schema,
     {
-        let val = match order {
-            TraverseOrder::TopDown => f(self)?,
-            TraverseOrder::BottomUp => self,
-        };
-
-        let val = match val {
+        let val = match self {
             Schema::Always
             | Schema::Never
             | Schema::Null
@@ -1330,135 +1300,127 @@ impl Traverse<Schema> for Schema {
             | Schema::Enum(_)
             | Schema::Number(_)
             | Schema::String(_)
-            | Schema::Ref(_) => val,
-            Schema::Object(obj) => Schema::Object(obj.traverse(f, order)?),
-            Schema::Array(arr) => Schema::Array(arr.traverse(f, order)?),
-            Schema::AnyOf(vec) => Schema::AnyOf(vec.traverse(f, order)?),
-            Schema::OneOf(vec) => Schema::OneOf(vec.traverse(f, order)?),
-            Schema::AllOf(vec) => Schema::AllOf(vec.traverse(f, order)?),
+            | Schema::Ref(_) => self,
+            Schema::Object(obj) => Schema::Object(obj.traverse(f)),
+            Schema::Array(arr) => Schema::Array(arr.traverse(f)),
+            Schema::AnyOf(vec) => Schema::AnyOf(vec.traverse(f)),
+            Schema::OneOf(vec) => Schema::OneOf(vec.traverse(f)),
+            Schema::AllOf(vec) => Schema::AllOf(vec.traverse(f)),
             Schema::Ite { iph, then, els } => Schema::Ite {
-                iph: iph.traverse(f, order)?,
-                then: then.traverse(f, order)?,
-                els: els.traverse(f, order)?,
+                iph: iph.traverse(f),
+                then: then.traverse(f),
+                els: els.traverse(f),
             },
-            Schema::Not(schema) => Schema::Not(schema.traverse(f, order)?),
+            Schema::Not(schema) => Schema::Not(schema.traverse(f)),
         };
 
-        match order {
-            TraverseOrder::TopDown => Ok(val),
-            TraverseOrder::BottomUp => f(val),
-        }
+        f(val)
     }
 }
 
 impl<S, T: Traverse<S>> Traverse<S> for Box<T> {
-    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    fn traverse<F>(self, f: &mut F) -> Self
     where
-        F: FnMut(S) -> Result<S, E>,
+        F: FnMut(S) -> S,
     {
-        (*self).traverse(f, order).map(Box::new)
+        Box::new((*self).traverse(f))
     }
 }
 
 impl<S, T: Traverse<S>> Traverse<S> for Option<T> {
-    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    fn traverse<F>(self, f: &mut F) -> Self
     where
-        F: FnMut(S) -> Result<S, E>,
+        F: FnMut(S) -> S,
     {
-        self.map(|v| v.traverse(f, order)).transpose()
+        self.map(|v| v.traverse(f))
     }
 }
 
 impl<S, T: Traverse<S>> Traverse<S> for Vec<T> {
-    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    fn traverse<F>(self, f: &mut F) -> Self
     where
-        F: FnMut(S) -> Result<S, E>,
+        F: FnMut(S) -> S,
     {
-        self.into_iter().map(|x| x.traverse(f, order)).collect()
+        self.into_iter().map(|x| x.traverse(f)).collect()
     }
 }
 
-impl<K: Ord + Eq + std::fmt::Debug, S, T: Traverse<S>> Traverse<S> for BTreeMap<K, T> {
-    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+impl<K: Ord + Eq, S, T: Traverse<S>> Traverse<S> for BTreeMap<K, T> {
+    fn traverse<F>(self, f: &mut F) -> Self
     where
-        F: FnMut(S) -> Result<S, E>,
+        F: FnMut(S) -> S,
     {
-        self.into_iter()
-            .map(|(k, v)| Ok((k, v.traverse(f, order)?)))
-            .collect()
+        self.into_iter().map(|(k, v)| (k, v.traverse(f))).collect()
     }
 }
 
 impl Traverse<Schema> for Property {
-    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    fn traverse<F>(self, f: &mut F) -> Self
     where
-        F: FnMut(Schema) -> Result<Schema, E>,
+        F: FnMut(Schema) -> Schema,
     {
-        Ok(Property {
+        Property {
             doc: self.doc,
             optional: self.optional,
-            schema: self.schema.traverse(f, order)?,
-        })
+            schema: self.schema.traverse(f),
+        }
     }
 }
 
 impl Traverse<Schema> for Obj {
-    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    fn traverse<F>(self, f: &mut F) -> Self
     where
-        F: FnMut(Schema) -> Result<Schema, E>,
+        F: FnMut(Schema) -> Schema,
     {
-        let val = match self {
+        match self {
             Obj::Any
             | Obj::MaxProperties(_)
             | Obj::MinProperties(_)
             | Obj::Required(_)
             | Obj::DependentFields(_) => self,
-            Obj::PropertyNames(schema) => Obj::PropertyNames(schema.traverse(f, order)?),
-            Obj::DependentSchemas(deps) => Obj::DependentSchemas(deps.traverse(f, order)?),
+            Obj::PropertyNames(schema) => Obj::PropertyNames(schema.traverse(f)),
+            Obj::DependentSchemas(deps) => Obj::DependentSchemas(deps.traverse(f)),
             Obj::Properties(props) => Obj::Properties(ObjectProperties {
-                properties: props.properties.traverse(f, order)?,
-                pattern_properties: props.pattern_properties.traverse(f, order)?,
-                additional_properties: props.additional_properties.traverse(f, order)?,
+                properties: props.properties.traverse(f),
+                pattern_properties: props.pattern_properties.traverse(f),
+                additional_properties: props.additional_properties.traverse(f),
             }),
-        };
-        Ok(val)
+        }
     }
 }
 
 impl Traverse<Schema> for Dependency {
-    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    fn traverse<F>(self, f: &mut F) -> Self
     where
-        F: FnMut(Schema) -> Result<Schema, E>,
+        F: FnMut(Schema) -> Schema,
     {
-        let val = match self {
+        match self {
             Dependency::Array(_) => self,
-            Dependency::Schema(schema) => Dependency::Schema(schema.traverse(f, order)?),
-        };
-        Ok(val)
+            Dependency::Schema(schema) => Dependency::Schema(schema.traverse(f)),
+        }
     }
 }
 
 impl Traverse<Schema> for Arr {
-    fn traverse<F, E>(self, f: &mut F, order: TraverseOrder) -> Result<Self, E>
+    fn traverse<F>(self, f: &mut F) -> Self
     where
-        F: FnMut(Schema) -> Result<Schema, E>,
+        F: FnMut(Schema) -> Schema,
     {
-        let val = match self {
+        match self {
             Arr::Any | Arr::MaxItems(_) | Arr::MinItems(_) | Arr::UniqueItems => self,
-            Arr::AllItems(schema) => Arr::AllItems(schema.traverse(f, order)?),
+            Arr::AllItems(schema) => Arr::AllItems(schema.traverse(f)),
             Arr::PerItem { initial, rest } => Arr::PerItem {
-                initial: initial.traverse(f, order)?,
-                rest: rest.traverse(f, order)?,
+                initial: initial.traverse(f),
+                rest: rest.traverse(f),
             },
-            Arr::Contains(schema) => Arr::Contains(schema.traverse(f, order)?),
-        };
-        Ok(val)
+            Arr::Contains(schema) => Arr::Contains(schema.traverse(f)),
+        }
     }
 }
 
 pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, BTreeMap<String, Schema>) {
     let mut refs = BTreeMap::new();
-    let mut record_ref = |schema: Schema| -> Result<Schema, Infallible> {
+    let mut record_ref = |schema: Schema| -> Schema {
         if let Schema::Ref(s) = schema {
             if !refs.contains_key(&s) {
                 match references::resolve_ptr(&s) {
@@ -1480,15 +1442,13 @@ pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, BTreeMap<St
                     },
                 }
             }
-            Ok(Schema::Ref(s))
+            Schema::Ref(s)
         } else {
-            Ok(schema)
+            schema
         }
     };
 
-    let schema = schema
-        .traverse(&mut record_ref, TraverseOrder::BottomUp)
-        .unwrap();
+    let schema = schema.traverse(&mut record_ref);
     (schema, refs)
 }
 
@@ -1594,8 +1554,8 @@ fn resolve_ptr<'a>(ptr: &SchemaPointer, root: &'a Value) -> miette::Result<&'a V
 }
 
 pub fn flatten_logical_ops(schema: Schema) -> Schema {
-    fn flatten_one(schema: Schema) -> Result<Schema, Infallible> {
-        let ret = match schema {
+    fn flatten_one(schema: Schema) -> Schema {
+        match schema {
             Schema::AnyOf(vec) | Schema::OneOf(vec) if vec.is_empty() => Schema::Never,
             Schema::AllOf(vec) if vec.is_empty() => Schema::Always,
 
@@ -1613,7 +1573,7 @@ pub fn flatten_logical_ops(schema: Schema) -> Schema {
                         Schema::AllOf(e) => new_vec.extend(e),
                         Schema::Always => {}
                         Schema::Never => {
-                            return Ok(Schema::Never);
+                            return Schema::Never;
                         }
                         e => new_vec.push(e),
                     }
@@ -1628,7 +1588,7 @@ pub fn flatten_logical_ops(schema: Schema) -> Schema {
                     match elt {
                         Schema::AnyOf(e) => new_vec.extend(e),
                         Schema::Always => {
-                            return Ok(Schema::Always);
+                            return Schema::Always;
                         }
                         Schema::Never => {}
                         e => new_vec.push(e),
@@ -1637,13 +1597,10 @@ pub fn flatten_logical_ops(schema: Schema) -> Schema {
                 Schema::AnyOf(new_vec)
             }
             s => s,
-        };
-        Ok(ret)
+        }
     }
 
-    schema
-        .traverse(&mut flatten_one, TraverseOrder::BottomUp)
-        .unwrap()
+    schema.traverse(&mut flatten_one)
 }
 
 pub fn one_to_any(schema: Schema, refs: &References) -> Schema {
@@ -1656,17 +1613,14 @@ pub fn one_to_any(schema: Schema, refs: &References) -> Schema {
         matches!(simple_types, Some(tys) if distinct(tys.iter()))
     }
 
-    let mut one_to_any_one = |schema: Schema| -> Result<Schema, Infallible> {
-        let ret = match schema {
+    let mut one_to_any_one = |schema: Schema| -> Schema {
+        match schema {
             Schema::OneOf(vec) if distinct_types(&vec, refs) => Schema::AnyOf(vec),
             s => s,
-        };
-        Ok(ret)
+        }
     };
 
-    schema
-        .traverse(&mut one_to_any_one, TraverseOrder::BottomUp)
-        .unwrap()
+    schema.traverse(&mut one_to_any_one)
 }
 
 pub fn simplify(mut schema: Schema, refs: &References) -> Schema {
@@ -1685,8 +1639,8 @@ pub fn simplify(mut schema: Schema, refs: &References) -> Schema {
 }
 
 pub fn inline_refs(schema: Schema, refs: &References) -> Schema {
-    let mut inline_one = |schema: Schema| -> Result<Schema, Infallible> {
-        let ret = match schema {
+    let mut inline_one = |schema: Schema| -> Schema {
+        match schema {
             Schema::Ref(s) => match refs.get(&s).as_deref() {
                 // The ref-inlining heuristic could use some work. We probably
                 // want to avoid inlining large schemas, and we probably want to
@@ -1700,18 +1654,15 @@ pub fn inline_refs(schema: Schema, refs: &References) -> Schema {
                 None => Schema::Always,
             },
             s => s,
-        };
-        Ok(ret)
+        }
     };
 
-    schema
-        .traverse(&mut inline_one, TraverseOrder::BottomUp)
-        .unwrap()
+    schema.traverse(&mut inline_one)
 }
 
 pub fn merge_required_properties(schema: Schema) -> Schema {
-    let mut merge_one = |schema: Schema| -> Result<Schema, Infallible> {
-        let ret = match schema {
+    let mut merge_one = |schema: Schema| -> Schema {
+        match schema {
             Schema::AllOf(vec) => {
                 let mut required = BTreeSet::new();
                 let mut props = Vec::new();
@@ -1745,18 +1696,15 @@ pub fn merge_required_properties(schema: Schema) -> Schema {
                 Schema::AllOf(new_vec)
             }
             s => s,
-        };
-        Ok(ret)
+        }
     };
 
-    schema
-        .traverse(&mut merge_one, TraverseOrder::BottomUp)
-        .unwrap()
+    schema.traverse(&mut merge_one)
 }
 
 pub fn intersect_types(schema: Schema, refs: &References) -> Schema {
-    let mut intersect_one = |schema: Schema| -> Result<Schema, Infallible> {
-        let ret = match schema {
+    let mut intersect_one = |schema: Schema| -> Schema {
+        match schema {
             Schema::AllOf(mut vec) => {
                 // The set of allowed types is the intersection, over all elements of `vec`,
                 // of that schema's set of allowed types.
@@ -1793,14 +1741,10 @@ pub fn intersect_types(schema: Schema, refs: &References) -> Schema {
                 Schema::AllOf(vec)
             }
             s => s,
-        };
-
-        Ok(ret)
+        }
     };
 
-    schema
-        .traverse(&mut intersect_one, TraverseOrder::BottomUp)
-        .unwrap()
+    schema.traverse(&mut intersect_one)
 }
 
 fn enumerate_regex(s: &str, max_expansion: usize) -> Option<Vec<String>> {
@@ -1918,19 +1862,16 @@ pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schem
         Some(new_props)
     }
 
-    let mut enumerate_one = |schema: Schema| -> Result<Schema, Infallible> {
-        let ret = match schema {
+    let mut enumerate_one = |schema: Schema| -> Schema {
+        match schema {
             Schema::Object(Obj::Properties(props)) => Schema::Object(Obj::Properties(
                 try_expand_props(&props, max_expansion).unwrap_or(props),
             )),
             s => s,
-        };
-        Ok(ret)
+        }
     };
 
-    schema
-        .traverse(&mut enumerate_one, TraverseOrder::BottomUp)
-        .unwrap()
+    schema.traverse(&mut enumerate_one)
 }
 
 pub struct RefGuard<'b, 'a: 'b> {
@@ -1984,14 +1925,14 @@ impl<'a> References<'a> {
 
 fn all_shadowed_names(s: Schema) -> (Schema, HashSet<String>) {
     let mut ret = HashSet::new();
-    let mut shadowed = |s: Schema| -> Result<Schema, Infallible> {
+    let mut shadowed = |s: Schema| -> Schema {
         if let Schema::Object(Obj::Properties(props)) = &s {
             ret.extend(props.properties.keys().cloned());
         }
-        Ok(s)
+        s
     };
 
-    let s = s.traverse(&mut shadowed, TraverseOrder::BottomUp).unwrap();
+    let s = s.traverse(&mut shadowed);
     (s, ret)
 }
 
@@ -2005,14 +1946,14 @@ fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
 
 fn all_ref_names(s: Schema) -> (Schema, HashSet<String>) {
     let mut ret = HashSet::new();
-    let mut ref_name = |s: Schema| -> Result<Schema, Infallible> {
+    let mut ref_name = |s: Schema| -> Schema {
         if let Schema::Ref(s) = &s {
             ret.insert(s.clone());
         }
-        Ok(s)
+        s
     };
 
-    let s = s.traverse(&mut ref_name, TraverseOrder::BottomUp).unwrap();
+    let s = s.traverse(&mut ref_name);
     (s, ret)
 }
 

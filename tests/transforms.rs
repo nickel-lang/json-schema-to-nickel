@@ -1,7 +1,5 @@
 use insta::assert_ron_snapshot;
-use json_schema_to_nickel::intermediate::{
-    self, inline_refs, resolve_references, simplify, References,
-};
+use json_schema_to_nickel::intermediate::{self, inline_refs, simplify, References};
 use libtest_mimic::{Arguments, Trial};
 use std::{path::Path, process::ExitCode};
 

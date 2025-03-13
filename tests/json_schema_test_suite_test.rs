@@ -1,11 +1,7 @@
-use schemars::schema::Schema;
 use std::io::stderr;
 
 use json_schema_test_suite::{json_schema_test_suite, TestCase};
-use json_schema_to_nickel::{
-    convert, inline_lib, intermediate, predicates::AsPredicate, references::Environment,
-    wrap_inline_lib,
-};
+use json_schema_to_nickel::{inline_lib, intermediate};
 use nickel_lang_core::{
     error::{Error, EvalError},
     eval::cache::lazy::CBNCache,
