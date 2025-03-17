@@ -2,8 +2,11 @@ use std::collections::HashSet;
 
 use nickel_lang_core::{
     identifier::LocIdent,
-    term::{make, RichTerm},
+    mk_app,
+    term::{array::ArrayAttrs, make, Rational, RichTerm, Term},
+    typ::{EnumRows, RecordRows, Type, TypeF},
 };
+use ordered_float::NotNan;
 
 pub fn static_access<I, S>(record: S, fields: I) -> RichTerm
 where
@@ -29,4 +32,30 @@ pub fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool
         }
     }
     true
+}
+
+pub fn type_contract(ty: TypeF<Box<Type>, RecordRows, EnumRows, RichTerm>) -> RichTerm {
+    Term::Type {
+        typ: ty.into(),
+        // We don't actually care about the contract -- it's a runtime thing.
+        contract: Term::Null.into(),
+    }
+    .into()
+}
+
+pub fn num(x: NotNan<f64>) -> RichTerm {
+    // unwrap: TODO json doesn't have infinity so this should be fine. But maybe there's a
+    // better type than NotNan?
+    Term::Num(Rational::try_from(x.into_inner()).unwrap()).into()
+}
+
+pub fn sequence(mut contracts: Vec<RichTerm>) -> RichTerm {
+    if contracts.len() == 1 {
+        contracts.pop().unwrap()
+    } else {
+        mk_app!(
+            static_access("std", ["contract", "Sequence"]),
+            Term::Array(contracts.into_iter().collect(), ArrayAttrs::default())
+        )
+    }
 }

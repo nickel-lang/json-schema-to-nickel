@@ -5,15 +5,22 @@
 //! "additionalProperties') an implicit "and" between all fields of a schema; rather
 //! than do that, our representation always makes boolean operations explicit.
 
-use std::collections::{BTreeMap, BTreeSet};
-
+use nickel_lang_core::{
+    identifier::Ident,
+    mk_app,
+    term::{array::ArrayAttrs, RichTerm, Term},
+    typ::{EnumRowF, EnumRows, EnumRowsF, TypeF},
+};
 use ordered_float::NotNan;
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
+    contract::ContractContext,
+    object::Obj,
     references::References,
     typ::{InstanceType, InstanceTypeSet},
+    utils::{num, sequence, type_contract},
 };
 
 #[derive(Clone, Debug, Serialize, Hash, PartialEq, Eq)]
@@ -268,41 +275,177 @@ impl Schema {
             Schema::Not(schema) => schema.is_always_eager(refs),
         }
     }
-}
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub enum Obj {
-    Any,
-    Properties(ObjectProperties),
-    MaxProperties(u64),
-    MinProperties(u64),
-    Required(BTreeSet<String>),
-    // This could be simplified maybe, because we're guaranteed that this will only need to validate strings.
-    PropertyNames(Box<Schema>),
-    DependentFields(BTreeMap<String, Vec<String>>),
-    DependentSchemas(BTreeMap<String, Schema>),
-}
+    pub fn to_contract(&self, ctx: ContractContext) -> Vec<RichTerm> {
+        match self {
+            Schema::Always => vec![ctx.js2n("Always")],
+            Schema::Never => vec![ctx.js2n("Never")],
+            Schema::Null => vec![ctx.js2n("Null")],
+            Schema::Boolean => vec![type_contract(TypeF::Bool)],
+            Schema::Const(val) => {
+                let nickel_val: RichTerm = serde_json::from_value(val.clone()).unwrap();
+                if ctx.eager {
+                    vec![mk_app!(ctx.js2n("Const"), nickel_val)]
+                } else {
+                    vec![mk_app!(ctx.std("contract.Equal"), nickel_val)]
+                }
+            }
+            Schema::Enum(vec) => {
+                if let Some(strings) = vec.iter().map(|v| v.as_str()).collect::<Option<Vec<_>>>() {
+                    let enum_rows: EnumRows =
+                        strings.iter().fold(EnumRows(EnumRowsF::Empty), |acc, s| {
+                            let row = EnumRowF {
+                                id: Ident::new(s).into(),
+                                typ: None,
+                            };
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub struct Property {
-    pub doc: Option<String>,
-    pub schema: Schema,
-    pub optional: bool,
-}
+                            EnumRows(EnumRowsF::Extend {
+                                row,
+                                tail: Box::new(acc),
+                            })
+                        });
 
-impl From<Schema> for Property {
-    fn from(s: Schema) -> Self {
-        Property {
-            doc: None,
-            schema: s,
-            optional: true,
+                    vec![
+                        ctx.std("enum.TagOrString"),
+                        type_contract(TypeF::Enum(enum_rows)),
+                    ]
+                } else {
+                    vec![mk_app!(
+                        ctx.js2n("enum"),
+                        Term::Array(
+                            vec.iter()
+                                .map(|val| serde_json::from_value(val.clone()).unwrap())
+                                .collect(),
+                            ArrayAttrs::default()
+                        )
+                    )]
+                }
+            }
+            Schema::Object(obj) => obj.to_contract(ctx),
+            Schema::String(s) => vec![s.to_contract(ctx)],
+            Schema::Number(num) => vec![num.to_contract(ctx)],
+            Schema::Array(arr) => vec![arr.to_contract(ctx)],
+            Schema::Ref(s) => vec![ctx.ref_term(s)],
+            Schema::AnyOf(vec) => {
+                let eager = ctx.eager || !eagerly_disjoint(vec.iter(), ctx.refs);
+                let ctx = if eager { ctx.eager() } else { ctx.lazy() };
+                let contracts = vec.iter().map(|s| sequence(s.to_contract(ctx))).collect();
+                vec![mk_app!(
+                    ctx.std("contract.any_of"),
+                    Term::Array(contracts, ArrayAttrs::default())
+                )]
+            }
+            Schema::OneOf(vec) => {
+                let contracts = vec
+                    .iter()
+                    .map(|s| sequence(s.to_contract(ctx.eager())))
+                    .collect();
+                vec![mk_app!(
+                    ctx.js2n("one_of"),
+                    Term::Array(contracts, ArrayAttrs::default())
+                )]
+            }
+            Schema::AllOf(vec) => vec.iter().flat_map(|s| s.to_contract(ctx)).collect(),
+            Schema::Ite { iph, then, els } => {
+                // The "if" contract always needs to be checked eagerly.
+                let iph = sequence(iph.to_contract(ctx.eager()));
+                let then = sequence(then.to_contract(ctx));
+                let els = sequence(els.to_contract(ctx));
+                vec![mk_app!(ctx.js2n("if_then_else"), iph, then, els)]
+            }
+            Schema::Not(schema) => {
+                vec![mk_app!(
+                    ctx.std("contract.not"),
+                    sequence(schema.to_contract(ctx.eager()))
+                )]
+            }
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub struct ObjectProperties {
-    pub properties: BTreeMap<String, Property>,
-    pub pattern_properties: BTreeMap<String, Schema>,
-    pub additional_properties: Option<Box<Schema>>,
+impl Str {
+    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
+        match self {
+            Str::Any => type_contract(TypeF::String),
+            Str::MaxLength(n) => {
+                mk_app!(ctx.js2n("string.MaxLength"), Term::Num((*n).into()))
+            }
+            Str::MinLength(n) => {
+                mk_app!(ctx.js2n("string.MinLength"), Term::Num((*n).into()))
+            }
+            Str::Pattern(s) => mk_app!(ctx.js2n("string.Matches"), Term::Str(s.to_owned().into())),
+        }
+    }
+}
+
+impl Num {
+    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
+        match self {
+            Num::Any => type_contract(TypeF::Number),
+            Num::MultipleOf(x) => mk_app!(ctx.js2n("number.MultipleOf"), num(*x)),
+            Num::Maximum(x) => mk_app!(ctx.js2n("number.Maximum"), num(*x)),
+            Num::Minimum(x) => mk_app!(ctx.js2n("number.Minimum"), num(*x)),
+            Num::ExclusiveMinimum(x) => {
+                mk_app!(ctx.js2n("number.ExclusiveMinimum"), num(*x))
+            }
+            Num::ExclusiveMaximum(x) => {
+                mk_app!(ctx.js2n("number.ExclusiveMaximum"), num(*x))
+            }
+            Num::Integer => ctx.std("number.Integer"),
+        }
+    }
+}
+
+impl Arr {
+    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
+        match self {
+            Arr::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
+            Arr::AllItems(schema) => {
+                if ctx.eager {
+                    mk_app!(ctx.js2n("array.ArrayOf"), sequence(schema.to_contract(ctx)))
+                } else {
+                    type_contract(TypeF::Array(Box::new(
+                        TypeF::Contract(sequence(schema.to_contract(ctx))).into(),
+                    )))
+                }
+            }
+            Arr::PerItem { initial, rest } => {
+                let initial = initial.iter().map(|s| sequence(s.to_contract(ctx)));
+                let rest = sequence(rest.to_contract(ctx));
+                mk_app!(
+                    ctx.js2n("array.Items"),
+                    Term::Array(initial.collect(), ArrayAttrs::default()),
+                    rest
+                )
+            }
+            Arr::MaxItems(n) => {
+                mk_app!(ctx.js2n("array.MaxItems"), Term::Num((*n).into()))
+            }
+            Arr::MinItems(n) => {
+                mk_app!(ctx.js2n("array.MinItems"), Term::Num((*n).into()))
+            }
+            Arr::UniqueItems => ctx.js2n("array.UniqueItems"),
+            Arr::Contains(schema) => {
+                let contract = sequence(schema.to_contract(ctx.eager()));
+                mk_app!(ctx.js2n("array.Contains"), contract)
+            }
+        }
+    }
+}
+
+fn eagerly_disjoint<'a>(schemas: impl Iterator<Item = &'a Schema>, refs: &References) -> bool {
+    let mut seen_types = InstanceTypeSet::EMPTY;
+
+    for s in schemas {
+        let Some(ty) = s.simple_type(refs) else {
+            return false;
+        };
+
+        if seen_types.contains(ty) {
+            return false;
+        }
+
+        seen_types.insert(ty);
+    }
+    true
 }

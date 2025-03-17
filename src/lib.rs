@@ -19,7 +19,10 @@
 //! convert it into a lazy Nickel record contract. If that fails, it instead
 //! generates a predicate. In either case, the result is wrapped with the
 //! necessary bindings to the predicate support library and returned.
+
+pub mod contract;
 pub mod intermediate;
+pub mod object;
 pub mod references;
 pub mod schema;
 pub mod traverse;

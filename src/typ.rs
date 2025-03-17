@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
-use crate::schema::{Arr, Num, Obj, Schema, Str};
+use crate::object::Obj;
+use crate::schema::{Arr, Num, Schema, Str};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]

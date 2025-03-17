@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::schema::{Arr, Obj, ObjectProperties, Property, Schema};
+use crate::{
+    object::{Obj, ObjectProperties, Property},
+    schema::{Arr, Schema},
+};
 
 pub trait Traverse<T>: Sized {
     fn traverse<F>(self, f: &mut F) -> Self
