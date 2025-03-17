@@ -9,6 +9,10 @@ pub trait Traverse<T>: Sized {
     fn traverse<F>(self, f: &mut F) -> Self
     where
         F: FnMut(T) -> T;
+
+    fn traverse_ref<F>(&self, f: &mut F)
+    where
+        F: FnMut(&T);
 }
 
 impl Traverse<Schema> for Schema {
@@ -41,6 +45,37 @@ impl Traverse<Schema> for Schema {
 
         f(val)
     }
+
+    fn traverse_ref<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Schema),
+    {
+        match self {
+            Schema::Always
+            | Schema::Never
+            | Schema::Null
+            | Schema::Boolean
+            | Schema::Const(_)
+            | Schema::Enum(_)
+            | Schema::Number(_)
+            | Schema::String(_)
+            | Schema::Ref(_) => {}
+            Schema::Object(obj) => obj.traverse_ref(f),
+            Schema::Array(arr) => arr.traverse_ref(f),
+            Schema::AnyOf(vec) => vec.traverse_ref(f),
+            Schema::OneOf(vec) => vec.traverse_ref(f),
+            Schema::AllOf(vec) => vec.traverse_ref(f),
+            Schema::Ite { iph, then, els } => {
+                iph.traverse_ref(f);
+                then.traverse_ref(f);
+                els.traverse_ref(f);
+            }
+            Schema::Not(schema) => {
+                schema.traverse_ref(f);
+            }
+        }
+        f(self)
+    }
 }
 
 impl<S, T: Traverse<S>> Traverse<S> for Box<T> {
@@ -49,6 +84,13 @@ impl<S, T: Traverse<S>> Traverse<S> for Box<T> {
         F: FnMut(S) -> S,
     {
         Box::new((*self).traverse(f))
+    }
+
+    fn traverse_ref<F>(&self, f: &mut F)
+    where
+        F: FnMut(&S),
+    {
+        (**self).traverse_ref(f);
     }
 }
 
@@ -59,6 +101,15 @@ impl<S, T: Traverse<S>> Traverse<S> for Option<T> {
     {
         self.map(|v| v.traverse(f))
     }
+
+    fn traverse_ref<F>(&self, f: &mut F)
+    where
+        F: FnMut(&S),
+    {
+        if let Some(slf) = self.as_ref() {
+            slf.traverse_ref(f);
+        }
+    }
 }
 
 impl<S, T: Traverse<S>> Traverse<S> for Vec<T> {
@@ -68,6 +119,15 @@ impl<S, T: Traverse<S>> Traverse<S> for Vec<T> {
     {
         self.into_iter().map(|x| x.traverse(f)).collect()
     }
+
+    fn traverse_ref<F>(&self, f: &mut F)
+    where
+        F: FnMut(&S),
+    {
+        for s in self {
+            s.traverse_ref(f);
+        }
+    }
 }
 
 impl<K: Ord + Eq, S, T: Traverse<S>> Traverse<S> for BTreeMap<K, T> {
@@ -76,6 +136,15 @@ impl<K: Ord + Eq, S, T: Traverse<S>> Traverse<S> for BTreeMap<K, T> {
         F: FnMut(S) -> S,
     {
         self.into_iter().map(|(k, v)| (k, v.traverse(f))).collect()
+    }
+
+    fn traverse_ref<F>(&self, f: &mut F)
+    where
+        F: FnMut(&S),
+    {
+        for s in self.values() {
+            s.traverse_ref(f);
+        }
     }
 }
 
@@ -89,6 +158,13 @@ impl Traverse<Schema> for Property {
             optional: self.optional,
             schema: self.schema.traverse(f),
         }
+    }
+
+    fn traverse_ref<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Schema),
+    {
+        self.schema.traverse_ref(f);
     }
 }
 
@@ -112,6 +188,26 @@ impl Traverse<Schema> for Obj {
             }),
         }
     }
+
+    fn traverse_ref<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Schema),
+    {
+        match self {
+            Obj::Any
+            | Obj::MaxProperties(_)
+            | Obj::MinProperties(_)
+            | Obj::Required(_)
+            | Obj::DependentFields(_) => {}
+            Obj::PropertyNames(schema) => schema.traverse_ref(f),
+            Obj::DependentSchemas(deps) => deps.traverse_ref(f),
+            Obj::Properties(props) => {
+                props.properties.traverse_ref(f);
+                props.pattern_properties.traverse_ref(f);
+                props.additional_properties.traverse_ref(f);
+            }
+        }
+    }
 }
 
 impl Traverse<Schema> for Arr {
@@ -127,6 +223,21 @@ impl Traverse<Schema> for Arr {
                 rest: rest.traverse(f),
             },
             Arr::Contains(schema) => Arr::Contains(schema.traverse(f)),
+        }
+    }
+
+    fn traverse_ref<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Schema),
+    {
+        match self {
+            Arr::Any | Arr::MaxItems(_) | Arr::MinItems(_) | Arr::UniqueItems => {}
+            Arr::AllItems(schema) => schema.traverse_ref(f),
+            Arr::PerItem { initial, rest } => {
+                initial.traverse_ref(f);
+                rest.traverse_ref(f);
+            }
+            Arr::Contains(schema) => schema.traverse_ref(f),
         }
     }
 }

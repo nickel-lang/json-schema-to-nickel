@@ -33,7 +33,7 @@ fn snapshot_ir(path: &Path, name: &str) {
     let val: serde_json::Value = serde_json::from_str(&file).unwrap();
     let schema: Schema = (&val).try_into().unwrap();
 
-    let (schema, all_refs) = intermediate::resolve_references_recursive(&val, schema);
+    let all_refs = intermediate::resolve_references_recursive(&val, &schema);
     let refs = References::new(&all_refs);
     let simple_refs = all_refs
         .iter()

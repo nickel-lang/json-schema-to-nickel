@@ -315,8 +315,6 @@ fn extract_number_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
 }
 
 fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>> {
-    // Properties(ObjectProperties),
-    //
     let mut ret = Vec::new();
 
     if let Some(max) = get_unsigned(obj, "maxProperties")? {
@@ -459,12 +457,12 @@ fn extract_array_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>
     Ok(ret)
 }
 
-pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, BTreeMap<String, Schema>) {
+pub fn resolve_references(value: &Value, schema: &Schema) -> BTreeMap<String, Schema> {
     let mut refs = BTreeMap::new();
-    let mut record_ref = |schema: Schema| -> Schema {
+    let mut record_ref = |schema: &Schema| {
         if let Schema::Ref(s) = schema {
-            if !refs.contains_key(&s) {
-                match references::resolve_ptr(&s) {
+            if !refs.contains_key(s) {
+                match references::resolve_ptr(s) {
                     None => {
                         eprintln!("skipping unparseable pointer \"{s}\"");
                     }
@@ -483,21 +481,15 @@ pub fn resolve_references(value: &Value, schema: Schema) -> (Schema, BTreeMap<St
                     },
                 }
             }
-            Schema::Ref(s)
-        } else {
-            schema
         }
     };
 
-    let schema = schema.traverse(&mut record_ref);
-    (schema, refs)
+    schema.traverse_ref(&mut record_ref);
+    refs
 }
 
-pub fn resolve_references_recursive(
-    value: &Value,
-    schema: Schema,
-) -> (Schema, BTreeMap<String, Schema>) {
-    let (schema, mut refs) = resolve_references(value, schema);
+pub fn resolve_references_recursive(value: &Value, schema: &Schema) -> BTreeMap<String, Schema> {
+    let mut refs = resolve_references(value, schema);
     let mut seen_refs: HashSet<_> = refs.keys().cloned().collect();
     let mut unfollowed_refs = seen_refs.clone();
 
@@ -505,7 +497,7 @@ pub fn resolve_references_recursive(
         let mut next_refs = HashSet::new();
         for name in unfollowed_refs {
             // unwrap: refs is always a superset of unfollowed_refs
-            let (_schema, new_refs) = resolve_references(value, refs[&name].clone());
+            let new_refs = resolve_references(value, &refs[&name]);
 
             next_refs.extend(new_refs.keys().cloned());
             refs.extend(new_refs);
@@ -514,7 +506,7 @@ pub fn resolve_references_recursive(
         seen_refs.extend(next_refs);
     }
 
-    (schema, refs)
+    refs
 }
 
 impl SchemaPointerElt {
@@ -915,17 +907,16 @@ pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schem
     schema.traverse(&mut enumerate_one)
 }
 
-fn all_shadowed_names(s: Schema) -> (Schema, HashSet<String>) {
+fn all_shadowed_names(s: &Schema) -> HashSet<String> {
     let mut ret = HashSet::new();
-    let mut shadowed = |s: Schema| -> Schema {
-        if let Schema::Object(Obj::Properties(props)) = &s {
+    let mut shadowed = |s: &Schema| {
+        if let Schema::Object(Obj::Properties(props)) = s {
             ret.extend(props.properties.keys().cloned());
         }
-        s
     };
 
-    let s = s.traverse(&mut shadowed);
-    (s, ret)
+    s.traverse_ref(&mut shadowed);
+    ret
 }
 
 fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
@@ -936,31 +927,30 @@ fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
     ret
 }
 
-fn all_ref_names(s: Schema) -> (Schema, HashSet<String>) {
+fn all_ref_names(s: &Schema) -> HashSet<String> {
     let mut ret = HashSet::new();
-    let mut ref_name = |s: Schema| -> Schema {
-        if let Schema::Ref(s) = &s {
+    let mut ref_name = |s: &Schema| {
+        if let Schema::Ref(s) = s {
             ret.insert(s.clone());
         }
-        s
     };
 
-    let s = s.traverse(&mut ref_name);
-    (s, ret)
+    s.traverse_ref(&mut ref_name);
+    ret
 }
 
-pub fn to_nickel(s: Schema, refs: &References, import_term: RichTerm) -> RichTerm {
-    let (s, mut all_refs) = all_ref_names(s);
+pub fn to_nickel(s: &Schema, refs: &References, import_term: RichTerm) -> RichTerm {
+    let mut all_refs = all_ref_names(s);
 
     let mut unfollowed_refs = all_refs.clone();
-    let (s, mut shadowed_names) = all_shadowed_names(s);
+    let mut shadowed_names = all_shadowed_names(s);
 
     while !unfollowed_refs.is_empty() {
         let mut next_refs = HashSet::new();
         for name in unfollowed_refs {
             if let Some(schema) = refs.get(&name) {
-                let (schema, new_refs) = all_ref_names(schema.clone());
-                let (_, new_shadowed_names) = all_shadowed_names(schema);
+                let new_refs = all_ref_names(&schema);
+                let new_shadowed_names = all_shadowed_names(&schema);
                 next_refs.extend(new_refs);
                 shadowed_names.extend(new_shadowed_names);
             }
@@ -1025,7 +1015,7 @@ pub fn to_nickel(s: Schema, refs: &References, import_term: RichTerm) -> RichTer
 
 pub fn convert(val: &serde_json::Value, lib_import: RichTerm) -> miette::Result<RichTerm> {
     let schema: Schema = val.try_into()?;
-    let (schema, all_refs) = resolve_references_recursive(val, schema);
+    let all_refs = resolve_references_recursive(val, &schema);
     let refs = References::new(&all_refs);
     let simple_refs = all_refs
         .iter()
@@ -1035,7 +1025,7 @@ pub fn convert(val: &serde_json::Value, lib_import: RichTerm) -> miette::Result<
     let schema = inline_refs(schema, &refs);
     let schema = simplify(schema, &refs);
 
-    Ok(to_nickel(schema, &refs, lib_import))
+    Ok(to_nickel(&schema, &refs, lib_import))
 }
 
 #[cfg(test)]
