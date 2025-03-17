@@ -21,6 +21,7 @@
 //! necessary bindings to the predicate support library and returned.
 
 pub mod contract;
+pub mod extract;
 pub mod intermediate;
 pub mod object;
 pub mod references;

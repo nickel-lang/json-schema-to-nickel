@@ -35,10 +35,13 @@ use std::{
 };
 
 use fluent_uri;
+use miette::miette;
 
 use nickel_lang_core::term::RichTerm;
+use serde_json::Value;
 
 use crate::{
+    extract::{get_array, get_object},
     schema::Schema,
     utils::{decode_json_ptr_part, static_access},
 };
@@ -203,6 +206,64 @@ impl SchemaPointer {
             .iter()
             .all(|elt| matches!(elt, SchemaPointerElt::Properties(_)))
     }
+
+    pub fn resolve_in<'a>(&self, root: &'a Value) -> miette::Result<&'a Value> {
+        let mut val = root;
+        for elt in self.path.iter() {
+            match elt {
+                SchemaPointerElt::Definitions(name) => {
+                    let Some(obj) = val.as_object() else {
+                        miette::bail!("cannot look up definitions in a non-object");
+                    };
+                    val = get_object(obj, "definitions")?
+                        .ok_or_else(|| miette!("no definitions"))?
+                        .get(name)
+                        .ok_or_else(|| miette!("missing {name}"))?;
+                }
+                SchemaPointerElt::Properties(name) => {
+                    let Some(obj) = val.as_object() else {
+                        miette::bail!("cannot look up {} in a non-object", elt.name());
+                    };
+                    let Some(props) = get_object(obj, "properties")? else {
+                        miette::bail!("no \"properties\" field");
+                    };
+                    val = props
+                        .get(name)
+                        .ok_or_else(|| miette!("field {name} not found"))?;
+                }
+                SchemaPointerElt::ItemsIndexed(i)
+                | SchemaPointerElt::AllOf(i)
+                | SchemaPointerElt::AnyOf(i)
+                | SchemaPointerElt::OneOf(i) => {
+                    let Some(obj) = val.as_object() else {
+                        miette::bail!("cannot look up {} in a non-object", elt.name());
+                    };
+
+                    let field = get_array(obj, elt.name())?
+                        .ok_or_else(|| miette!("field {} not found", elt.name()))?;
+
+                    val = field
+                        .get(*i)
+                        .ok_or_else(|| miette!("array has no index {i}"))?;
+                }
+                SchemaPointerElt::ItemsSingle
+                | SchemaPointerElt::Contains
+                | SchemaPointerElt::AdditionalProperties
+                | SchemaPointerElt::Not
+                | SchemaPointerElt::Then
+                | SchemaPointerElt::Else => {
+                    let Some(obj) = val.as_object() else {
+                        miette::bail!("cannot look up {} in a non-object", elt.name());
+                    };
+
+                    val = obj
+                        .get(elt.name())
+                        .ok_or(miette!("field {} not found", elt.name()))?;
+                }
+            };
+        }
+        Ok(val)
+    }
 }
 
 impl std::fmt::Display for SchemaPointer {
@@ -249,6 +310,25 @@ pub enum SchemaPointerElt {
     Not,
     Then,
     Else,
+}
+
+impl SchemaPointerElt {
+    pub fn name(&self) -> &str {
+        match self {
+            SchemaPointerElt::Definitions(_) => "definitions",
+            SchemaPointerElt::Properties(_) => "properties",
+            SchemaPointerElt::AdditionalProperties => "additionalProperties",
+            SchemaPointerElt::ItemsIndexed(_) => "items",
+            SchemaPointerElt::ItemsSingle => "items",
+            SchemaPointerElt::Contains => "contains",
+            SchemaPointerElt::AllOf(_) => "allOf",
+            SchemaPointerElt::AnyOf(_) => "anyOf",
+            SchemaPointerElt::OneOf(_) => "oneOf",
+            SchemaPointerElt::Not => "not",
+            SchemaPointerElt::Then => "then",
+            SchemaPointerElt::Else => "else",
+        }
+    }
 }
 
 impl std::fmt::Display for SchemaPointerElt {
@@ -303,7 +383,7 @@ impl std::fmt::Display for SchemaPointerParseError {
     }
 }
 
-pub fn resolve_ptr(reference: &str) -> Option<SchemaPointer> {
+pub fn parse_ptr(reference: &str) -> Option<SchemaPointer> {
     let Ok(uri) = fluent_uri::Uri::parse(reference) else {
         eprintln!(
             "Warning: skipping reference `{reference}` (replaced by an always succeeding \
