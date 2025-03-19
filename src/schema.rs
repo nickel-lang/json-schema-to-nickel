@@ -18,7 +18,7 @@ use serde_json::Value;
 use crate::{
     contract::ContractContext,
     object::Obj,
-    references::References,
+    references::AcyclicReferences,
     typ::{InstanceType, InstanceTypeSet},
     utils::{num, sequence, type_contract},
 };
@@ -99,8 +99,11 @@ fn apparent_types<'a>(values: impl IntoIterator<Item = &'a Value>) -> InstanceTy
 }
 
 impl Schema {
-    pub fn simple_type(&self, refs: &References) -> Option<InstanceType> {
-        fn simple_type_rec<'s>(slf: &'s Schema, refs: &'s References) -> Option<InstanceType> {
+    pub fn simple_type(&self, refs: &AcyclicReferences) -> Option<InstanceType> {
+        fn simple_type_rec<'s>(
+            slf: &'s Schema,
+            refs: &'s AcyclicReferences,
+        ) -> Option<InstanceType> {
             match slf {
                 Schema::Always => None,
                 Schema::Never => None,
@@ -158,7 +161,7 @@ impl Schema {
         }
     }
 
-    pub fn allowed_types_shallow(&self, refs: &References) -> InstanceTypeSet {
+    pub fn allowed_types_shallow(&self, refs: &AcyclicReferences) -> InstanceTypeSet {
         match self {
             Schema::Always => InstanceTypeSet::FULL,
             Schema::Never => InstanceTypeSet::EMPTY,
@@ -187,7 +190,7 @@ impl Schema {
     }
 
     // TODO: may be worth memoizing something
-    pub fn allowed_types(&self, refs: &References) -> InstanceTypeSet {
+    pub fn allowed_types(&self, refs: &AcyclicReferences) -> InstanceTypeSet {
         match self {
             Schema::Always => InstanceTypeSet::FULL,
             Schema::Never => InstanceTypeSet::EMPTY,
@@ -221,7 +224,7 @@ impl Schema {
         }
     }
 
-    pub fn is_always_eager(&self, refs: &References) -> bool {
+    pub fn is_always_eager(&self, refs: &AcyclicReferences) -> bool {
         match self {
             Schema::Always
             | Schema::Never
@@ -433,7 +436,10 @@ impl Arr {
     }
 }
 
-fn eagerly_disjoint<'a>(schemas: impl Iterator<Item = &'a Schema>, refs: &References) -> bool {
+fn eagerly_disjoint<'a>(
+    schemas: impl Iterator<Item = &'a Schema>,
+    refs: &AcyclicReferences,
+) -> bool {
     let mut seen_types = InstanceTypeSet::EMPTY;
 
     for s in schemas {

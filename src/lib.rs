@@ -22,10 +22,10 @@
 
 pub mod contract;
 pub mod extract;
-pub mod intermediate;
 pub mod object;
 pub mod references;
 pub mod schema;
+pub mod transform;
 pub mod traverse;
 pub mod typ;
 pub(crate) mod utils;

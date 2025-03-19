@@ -1,7 +1,7 @@
 use std::io::stderr;
 
 use json_schema_test_suite::{json_schema_test_suite, TestCase};
-use json_schema_to_nickel::{inline_lib, intermediate};
+use json_schema_to_nickel::{inline_lib, transform};
 use nickel_lang_core::{
     error::{Error, EvalError},
     eval::cache::lazy::CBNCache,
@@ -62,7 +62,7 @@ fn translation_typecheck_test(
     _server_address: &str,
     test_case: TestCase,
 ) {
-    let contract = intermediate::convert(&test_case.schema, inline_lib()).unwrap();
+    let contract = transform::convert(&test_case.schema, inline_lib()).unwrap();
 
     let instance: RichTerm = serde_json::from_value(test_case.instance).unwrap();
 

@@ -43,6 +43,7 @@ use serde_json::Value;
 use crate::{
     extract::{get_array, get_object},
     schema::Schema,
+    traverse::Traverse as _,
     utils::{decode_json_ptr_part, static_access},
 };
 
@@ -443,8 +444,51 @@ pub fn parse_ptr(reference: &str) -> Option<SchemaPointer> {
     }
 }
 
+/// A reference map that avoids looping on cyclic references.
+pub struct AcyclicReferences<'a> {
+    inner: &'a BTreeMap<String, Schema>,
+    blackholed: RefCell<HashSet<&'a str>>,
+}
+
+impl<'a> AcyclicReferences<'a> {
+    /// Wrap a map of references to protect from acyclic lookups.
+    pub fn new(inner: &'a BTreeMap<String, Schema>) -> Self {
+        AcyclicReferences {
+            inner,
+            blackholed: RefCell::new(HashSet::new()),
+        }
+    }
+
+    /// Look up a reference by name, but protected against cyclic lookups.
+    ///
+    /// The return value is a guard, and until the guard is dropped any future
+    /// lookups for the same name will return `None`.
+    pub fn get<'b>(&'b self, name: &'b str) -> Option<RefGuard<'b, 'a>> {
+        if self.blackholed.borrow().contains(name) {
+            None
+        } else {
+            self.inner.get_key_value(name).map(|(stored_name, s)| {
+                self.blackholed.borrow_mut().insert(stored_name);
+                RefGuard {
+                    refs: self,
+                    name,
+                    schema: s,
+                }
+            })
+        }
+    }
+
+    /// Iterate over all name/schema pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Schema)> {
+        self.inner
+            .iter()
+            .map(|(name, schema)| (name.as_str(), schema))
+    }
+}
+
+/// A reference guard that protects from acyclic name lookups.
 pub struct RefGuard<'b, 'a: 'b> {
-    refs: &'b References<'a>,
+    refs: &'b AcyclicReferences<'a>,
     name: &'b str,
     schema: &'b Schema,
 }
@@ -463,37 +507,69 @@ impl<'b, 'a: 'b> std::ops::Deref for RefGuard<'b, 'a> {
     }
 }
 
-pub struct References<'a> {
-    inner: &'a BTreeMap<String, Schema>,
-    blackholed: RefCell<HashSet<&'a str>>,
+fn resolve_references_one(value: &Value, schema: &Schema) -> BTreeMap<String, Schema> {
+    let mut refs = BTreeMap::new();
+    let mut record_ref = |schema: &Schema| {
+        if let Schema::Ref(s) = schema {
+            if !refs.contains_key(s) {
+                match parse_ptr(s) {
+                    None => {
+                        eprintln!("skipping unparseable pointer \"{s}\"");
+                    }
+                    Some(ptr) => match ptr.resolve_in(value) {
+                        Ok(val) => match Schema::try_from(val) {
+                            Ok(v) => {
+                                refs.insert(s.clone(), v);
+                            }
+                            Err(e) => {
+                                eprintln!("skipping pointer \"{s}\" because we failed to convert the pointee: {e}");
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("skipping pointer \"{s}\" because it failed to resolve: {e}");
+                        }
+                    },
+                }
+            }
+        }
+    };
+
+    schema.traverse_ref(&mut record_ref);
+    refs
 }
 
-impl<'a> References<'a> {
-    pub fn new(inner: &'a BTreeMap<String, Schema>) -> Self {
-        References {
-            inner,
-            blackholed: RefCell::new(HashSet::new()),
+/// Resolves all references in `schema`, returning a map of reference name to
+/// the converted reference pointee.
+///
+/// The reference names in the map are the raw strings from the json, so they'll
+/// typically look something like "#/definitions/foo".
+///
+/// `value` is the json that was used to generate `schema`. It's needed here
+/// because references could point to things in `value` that aren't in `schema`.
+/// For example, everything in "#/definitions" won't be in `schema`. Technically,
+/// we could take only `value` as an argument and generate `schema` from it.
+///
+/// All references we find are resolved recursively, so that if the main schema
+/// contains a reference to "#/definitions/foo" and the "#/definitions/foo"
+/// schema contains a reference to "#/definitions/bar" then the returned map
+/// will contain both.
+pub fn resolve_all(value: &Value, schema: &Schema) -> BTreeMap<String, Schema> {
+    let mut refs = resolve_references_one(value, schema);
+    let mut seen_refs: HashSet<_> = refs.keys().cloned().collect();
+    let mut unfollowed_refs = seen_refs.clone();
+
+    while !unfollowed_refs.is_empty() {
+        let mut next_refs = HashSet::new();
+        for name in unfollowed_refs {
+            // unwrap: refs is always a superset of unfollowed_refs
+            let new_refs = resolve_references_one(value, &refs[&name]);
+
+            next_refs.extend(new_refs.keys().cloned());
+            refs.extend(new_refs);
         }
+        unfollowed_refs = next_refs.difference(&seen_refs).cloned().collect();
+        seen_refs.extend(next_refs);
     }
 
-    pub fn get<'b>(&'b self, name: &'b str) -> Option<RefGuard<'b, 'a>> {
-        if self.blackholed.borrow().contains(name) {
-            None
-        } else {
-            self.inner.get_key_value(name).map(|(stored_name, s)| {
-                self.blackholed.borrow_mut().insert(stored_name);
-                RefGuard {
-                    refs: self,
-                    name,
-                    schema: s,
-                }
-            })
-        }
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &Schema)> {
-        self.inner
-            .iter()
-            .map(|(name, schema)| (name.as_str(), schema))
-    }
+    refs
 }

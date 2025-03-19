@@ -5,12 +5,12 @@ use std::{
 
 use nickel_lang_core::term::RichTerm;
 
-use crate::{references::References, utils::static_access};
+use crate::{references::AcyclicReferences, utils::static_access};
 
 // TODO: provide a constructor and make fields private
 #[derive(Clone, Copy)]
 pub struct ContractContext<'a, 'refs> {
-    pub refs: &'a References<'refs>,
+    pub refs: &'a AcyclicReferences<'refs>,
     pub lib_name: &'a str,
     pub refs_name: &'a str,
     pub eager: bool,

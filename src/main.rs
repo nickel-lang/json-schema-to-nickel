@@ -6,7 +6,7 @@ use std::{
 };
 
 use clap::Parser;
-use json_schema_to_nickel::{inline_lib, intermediate};
+use json_schema_to_nickel::{inline_lib, transform};
 use nickel_lang_core::pretty::*;
 use terminal_size::{terminal_size, Width};
 
@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let val: serde_json::Value = serde_json::from_reader(f)?;
-    let contract = intermediate::convert(&val, lib_term)?;
+    let contract = transform::convert(&val, lib_term)?;
 
     let size = terminal_size()
         .map(|(Width(w), _)| w as usize)

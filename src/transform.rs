@@ -9,69 +9,16 @@ use std::{
 };
 
 use nickel_lang_core::term::{make, record::RecordData, RichTerm, Term};
-use serde_json::Value;
 
 use crate::{
     contract::ContractContext,
     object::{Obj, ObjectProperties},
-    references::{self, References},
+    references::{resolve_all, AcyclicReferences},
     schema::Schema,
     traverse::Traverse,
     typ::InstanceTypeSet,
     utils::{distinct, sequence},
 };
-
-pub fn resolve_references(value: &Value, schema: &Schema) -> BTreeMap<String, Schema> {
-    let mut refs = BTreeMap::new();
-    let mut record_ref = |schema: &Schema| {
-        if let Schema::Ref(s) = schema {
-            if !refs.contains_key(s) {
-                match references::parse_ptr(s) {
-                    None => {
-                        eprintln!("skipping unparseable pointer \"{s}\"");
-                    }
-                    Some(ptr) => match ptr.resolve_in(value) {
-                        Ok(val) => match Schema::try_from(val) {
-                            Ok(v) => {
-                                refs.insert(s.clone(), v);
-                            }
-                            Err(e) => {
-                                eprintln!("skipping pointer \"{s}\" because we failed to convert the pointee: {e}");
-                            }
-                        },
-                        Err(e) => {
-                            eprintln!("skipping pointer \"{s}\" because it failed to resolve: {e}");
-                        }
-                    },
-                }
-            }
-        }
-    };
-
-    schema.traverse_ref(&mut record_ref);
-    refs
-}
-
-pub fn resolve_references_recursive(value: &Value, schema: &Schema) -> BTreeMap<String, Schema> {
-    let mut refs = resolve_references(value, schema);
-    let mut seen_refs: HashSet<_> = refs.keys().cloned().collect();
-    let mut unfollowed_refs = seen_refs.clone();
-
-    while !unfollowed_refs.is_empty() {
-        let mut next_refs = HashSet::new();
-        for name in unfollowed_refs {
-            // unwrap: refs is always a superset of unfollowed_refs
-            let new_refs = resolve_references(value, &refs[&name]);
-
-            next_refs.extend(new_refs.keys().cloned());
-            refs.extend(new_refs);
-        }
-        unfollowed_refs = next_refs.difference(&seen_refs).cloned().collect();
-        seen_refs.extend(next_refs);
-    }
-
-    refs
-}
 
 pub fn flatten_logical_ops(schema: Schema) -> Schema {
     fn flatten_one(schema: Schema) -> Schema {
@@ -123,8 +70,8 @@ pub fn flatten_logical_ops(schema: Schema) -> Schema {
     schema.traverse(&mut flatten_one)
 }
 
-pub fn one_to_any(schema: Schema, refs: &References) -> Schema {
-    fn distinct_types(s: &[Schema], refs: &References) -> bool {
+pub fn one_to_any(schema: Schema, refs: &AcyclicReferences) -> Schema {
+    fn distinct_types(s: &[Schema], refs: &AcyclicReferences) -> bool {
         let simple_types = s
             .iter()
             .map(|s| s.simple_type(refs))
@@ -143,7 +90,7 @@ pub fn one_to_any(schema: Schema, refs: &References) -> Schema {
     schema.traverse(&mut one_to_any_one)
 }
 
-pub fn simplify(mut schema: Schema, refs: &References) -> Schema {
+pub fn simplify(mut schema: Schema, refs: &AcyclicReferences) -> Schema {
     loop {
         let prev = schema.clone();
         schema = flatten_logical_ops(schema);
@@ -158,7 +105,7 @@ pub fn simplify(mut schema: Schema, refs: &References) -> Schema {
     }
 }
 
-pub fn inline_refs(schema: Schema, refs: &References) -> Schema {
+pub fn inline_refs(schema: Schema, refs: &AcyclicReferences) -> Schema {
     let mut inline_one = |schema: Schema| -> Schema {
         match schema {
             Schema::Ref(s) => match refs.get(&s).as_deref() {
@@ -222,7 +169,7 @@ pub fn merge_required_properties(schema: Schema) -> Schema {
     schema.traverse(&mut merge_one)
 }
 
-pub fn intersect_types(schema: Schema, refs: &References) -> Schema {
+pub fn intersect_types(schema: Schema, refs: &AcyclicReferences) -> Schema {
     let mut intersect_one = |schema: Schema| -> Schema {
         match schema {
             Schema::AllOf(mut vec) => {
@@ -426,7 +373,7 @@ fn all_ref_names(s: &Schema) -> HashSet<String> {
     ret
 }
 
-pub fn to_nickel(s: &Schema, refs: &References, import_term: RichTerm) -> RichTerm {
+pub fn to_nickel(s: &Schema, refs: &AcyclicReferences, import_term: RichTerm) -> RichTerm {
     let mut all_refs = all_ref_names(s);
 
     let mut unfollowed_refs = all_refs.clone();
@@ -502,13 +449,13 @@ pub fn to_nickel(s: &Schema, refs: &References, import_term: RichTerm) -> RichTe
 
 pub fn convert(val: &serde_json::Value, lib_import: RichTerm) -> miette::Result<RichTerm> {
     let schema: Schema = val.try_into()?;
-    let all_refs = resolve_references_recursive(val, &schema);
-    let refs = References::new(&all_refs);
+    let all_refs = resolve_all(val, &schema);
+    let refs = AcyclicReferences::new(&all_refs);
     let simple_refs = all_refs
         .iter()
         .map(|(k, v)| (k.clone(), simplify(v.clone(), &refs)))
         .collect();
-    let refs = References::new(&simple_refs);
+    let refs = AcyclicReferences::new(&simple_refs);
     let schema = inline_refs(schema, &refs);
     let schema = simplify(schema, &refs);
 
