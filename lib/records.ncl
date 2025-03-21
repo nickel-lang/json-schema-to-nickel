@@ -116,7 +116,7 @@ let ErrData = { message | optional | String, notes | optional | Array String } i
       # Properties aren't required to be present.
       { } | Record { properties = { foo = Number }, required = {}, patterns = {}, additional = 'None }
       # => { }
-  
+
       # Properties aren't required to be present.
       { } | Record { properties = { foo = Number }, required = { foo = null }, patterns = {}, additional = 'None }
       # => error
@@ -265,7 +265,16 @@ let ErrData = { message | optional | String, notes | optional | Array String } i
   DependentFields
     | { _ | Array String } -> Dyn
     | doc m%"
-      TODO
+      A contract for asserting that if some fields are present, other fields are
+      also present.
+
+      Specifically, `DependentFields { foo = ["bar", "baz"] }` is a contract
+      asserting that if the field `foo` is present then the fields `bar` and
+      `baz` are also present. This corresponds to the part of JSON schema's
+      [dependencies](https://json-schema.org/draft-07/draft-handrews-json-schema-validation-01#rfc.section.6.5.7)
+      keyword in which the values are arrays.
+
+      This is an eager contract.
 
       ```nickel multiline
       { foo = 1, bar = 2 } | DependentFields { foo = ["bar"] }
@@ -311,6 +320,16 @@ let ErrData = { message | optional | String, notes | optional | Array String } i
   DependentContracts
     | { _ | Dyn } -> Dyn
     | doc m%"
+      A contract for asserting that if some fields are present then the entire
+      record satisfies a contract.
+
+      Specifically, `DependentContracts { foo = C }` is a contract asserting that
+      the value is a record, and if the value contains a field named `foo` then
+      the entire record satisfies the contract `C`.
+
+      `DependentContracts` calls `std.contract.check` for each of the provided
+      contracts. In particular, if `C` is fully eager then so is
+      `DependentContracts { foo = C }`.
 
       # Examples
 
@@ -370,9 +389,13 @@ let ErrData = { message | optional | String, notes | optional | Array String } i
       ),
 
   PropertyNames
-    | Dyn ->Dyn
+    | Dyn -> Dyn
     | doc m%"
-      TODO
+      `PropertyNames C` is a contract asserting that a value is a record and all of
+      its field names satisfy the contract `C`.
+
+      `PropertyNames C` is an eager contract for any `C`. Any lazy parts of `C` will
+      be ignored.
 
       ```nickel multiline
       { foo = 1 } | PropertyNames std.string.NonEmpty
@@ -383,16 +406,20 @@ let ErrData = { message | optional | String, notes | optional | Array String } i
       # => error: invalid number literal
       ```
     "%
-    = fun contract => std.contract.custom (fun label value =>
-      if !std.is_record value then
-      'Error { message = "expected a record" }
-      else
-        std.record.fields value
-        |> std.array.try_fold_left (fun acc field_name =>
-          std.contract.check contract label field_name |> match {
-            'Ok _ => 'Ok value,
-            'Error e => 'Error e,
-        }
-        ) ('Ok value)
-    ),
+    = fun contract =>
+      std.contract.custom (fun label value =>
+        if !std.is_record value then
+          'Error { message = "expected a record" }
+        else
+          std.record.fields value
+          |> std.array.try_fold_left
+            (fun acc field_name =>
+              std.contract.check contract label field_name
+              |> match {
+                'Ok _ => 'Ok value,
+                'Error e => 'Error e,
+              }
+            )
+            ('Ok value)
+      ),
 }
