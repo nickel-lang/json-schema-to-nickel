@@ -7,8 +7,16 @@ Object(Properties(ObjectProperties(
     "my_object": Property(
       doc: None,
       schema: AllOf([
-        Number(Minimum(3.0)),
-        Number(Maximum(5.0)),
+        Number(Minimum(Rational(
+          s: true,
+          n: "0x3",
+          d: "0x1",
+        ))),
+        Number(Maximum(Rational(
+          s: true,
+          n: "0x5",
+          d: "0x1",
+        ))),
       ]),
       optional: true,
     ),

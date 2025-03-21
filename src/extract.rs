@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use miette::miette;
-use ordered_float::NotNan;
+use nickel_lang_core::term::Number;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -171,29 +171,20 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
     }
 }
 
-fn get_unsigned(obj: &Map<String, Value>, field: &str) -> miette::Result<Option<u64>> {
+fn get_number(obj: &Map<String, Value>, field: &str) -> miette::Result<Option<Number>> {
     if let Some(val) = obj.get(field) {
         match val.as_number() {
-            Some(n) => Ok(Some(
-                n.as_u64()
-                    // TODO: better number handling
-                    .ok_or_else(|| miette!("{field} was a weird number"))?,
-            )),
-            None => miette::bail!("{field} must be a non-negative integer"),
-        }
-    } else {
-        Ok(None)
-    }
-}
-
-fn get_number(obj: &Map<String, Value>, field: &str) -> miette::Result<Option<f64>> {
-    if let Some(val) = obj.get(field) {
-        match val.as_number() {
-            Some(n) => Ok(Some(
-                n.as_f64()
-                    // TODO: better number handling
-                    .ok_or_else(|| miette!("{field} was a weird number"))?,
-            )),
+            Some(n) => Ok(Some(if let Some(f) = n.as_f64() {
+                Number::try_from(f).unwrap()
+            } else if let Some(n) = n.as_u128() {
+                Number::from(n)
+            } else if let Some(n) = n.as_i128() {
+                Number::from(n)
+            } else {
+                // As of this writing, serde_json doesn't support any other numbers. But
+                // it also doesn't allow exhaustive matching...
+                miette::bail!("{field} was a weird number")
+            })),
             None => miette::bail!("{field} must be a number"),
         }
     } else {
@@ -258,11 +249,11 @@ pub fn get_object<'a>(
 fn extract_string_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>> {
     let mut ret = Vec::new();
 
-    if let Some(max) = get_unsigned(obj, "maxLength")? {
+    if let Some(max) = get_number(obj, "maxLength")? {
         ret.push(Schema::String(Str::MaxLength(max)));
     }
 
-    if let Some(min) = get_unsigned(obj, "minLength")? {
+    if let Some(min) = get_number(obj, "minLength")? {
         ret.push(Schema::String(Str::MinLength(min)));
     }
 
@@ -277,25 +268,19 @@ fn extract_number_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
     let mut ret = Vec::new();
 
     if let Some(mult) = get_number(obj, "multipleOf")? {
-        ret.push(Schema::Number(Num::MultipleOf(
-            NotNan::try_from(mult).unwrap(),
-        )));
+        ret.push(Schema::Number(Num::MultipleOf(mult)));
     }
     if let Some(max) = get_number(obj, "maximum")? {
-        ret.push(Schema::Number(Num::Maximum(NotNan::try_from(max).unwrap())));
+        ret.push(Schema::Number(Num::Maximum(max)));
     }
     if let Some(min) = get_number(obj, "minimum")? {
-        ret.push(Schema::Number(Num::Minimum(NotNan::try_from(min).unwrap())));
+        ret.push(Schema::Number(Num::Minimum(min)));
     }
     if let Some(ex_max) = get_number(obj, "exclusiveMaximum")? {
-        ret.push(Schema::Number(Num::ExclusiveMaximum(
-            NotNan::try_from(ex_max).unwrap(),
-        )));
+        ret.push(Schema::Number(Num::ExclusiveMaximum(ex_max)));
     }
     if let Some(ex_min) = get_number(obj, "exclusiveMinimum")? {
-        ret.push(Schema::Number(Num::ExclusiveMinimum(
-            NotNan::try_from(ex_min).unwrap(),
-        )));
+        ret.push(Schema::Number(Num::ExclusiveMinimum(ex_min)));
     }
 
     Ok(ret)
@@ -304,10 +289,10 @@ fn extract_number_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
 fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>> {
     let mut ret = Vec::new();
 
-    if let Some(max) = get_unsigned(obj, "maxProperties")? {
+    if let Some(max) = get_number(obj, "maxProperties")? {
         ret.push(Schema::Object(Obj::MaxProperties(max)));
     }
-    if let Some(min) = get_unsigned(obj, "minProperties")? {
+    if let Some(min) = get_number(obj, "minProperties")? {
         ret.push(Schema::Object(Obj::MinProperties(min)));
     }
     if let Some(req) = get_array(obj, "required")? {
@@ -401,10 +386,10 @@ fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
 fn extract_array_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>> {
     let mut ret = Vec::new();
 
-    if let Some(max) = get_unsigned(obj, "maxItems")? {
+    if let Some(max) = get_number(obj, "maxItems")? {
         ret.push(Schema::Array(Arr::MaxItems(max)));
     }
-    if let Some(min) = get_unsigned(obj, "minItems")? {
+    if let Some(min) = get_number(obj, "minItems")? {
         ret.push(Schema::Array(Arr::MinItems(min)));
     }
     if let Some(unique) = obj.get("uniqueItems") {

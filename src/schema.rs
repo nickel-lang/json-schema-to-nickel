@@ -11,7 +11,6 @@ use nickel_lang_core::{
     term::{array::ArrayAttrs, RichTerm, Term},
     typ::{EnumRowF, EnumRows, EnumRowsF, TypeF},
 };
-use ordered_float::NotNan;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -23,49 +22,78 @@ use crate::{
     utils::{num, sequence, type_contract},
 };
 
+use nickel_lang_core::term::Number;
+
+/// A schema.
 #[derive(Clone, Debug, Serialize, Hash, PartialEq, Eq)]
 pub enum Schema {
+    /// Always succeeds.
     Always,
+    /// Always fails.
     Never,
+    /// Asserts that the value equals `null`.
     Null,
+    /// Asserts that the value is a boolean.
     Boolean,
+    /// Asserts that the value is equal to a specific constant.
     Const(Value),
+    /// Asserts that the value is equal to one of a number of constants.
     Enum(Vec<Value>),
+    /// Asserts that the value is an object, possibly with some additional constraints.
     Object(Obj),
+    /// Asserts that the value is a string, possibly with some additional constraints.
     String(Str),
+    /// Asserts that the value is a number, possibly with some additional constraints.
     Number(Num),
+    /// Asserts that the value is an array, possibly with some additional constraints.
     Array(Arr),
+    /// A reference to another schema.
+    ///
+    /// The string is a JSON-schema path, like "#/definitions/foo" or "#/properties/bar".
     Ref(String),
+    /// Asserts that at least one of the contained schemas succeeds.
     AnyOf(Vec<Schema>),
+    /// Asserts that exactly one of the contained schemas succeeds.
     OneOf(Vec<Schema>),
+    /// Asserts that all of the contained schemas succeed.
     AllOf(Vec<Schema>),
+    /// If `iph` succeeds, asserts that `then` does also. Otherwise, asserts that `els` succeeds.
     Ite {
         iph: Box<Schema>,
         then: Box<Schema>,
         els: Box<Schema>,
     },
+    /// Asserts that the contained schema fails.
     Not(Box<Schema>),
 }
 
+/// Schemas that apply to strings.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Str {
+    /// Any string is ok.
     Any,
-    MaxLength(u64),
-    MinLength(u64),
+    /// Asserts that a string isn't too long.
+    MaxLength(Number),
+    /// Asserts that a string isn't too short.
+    MinLength(Number),
+    /// Asserts that a string matches a regular expression.
     Pattern(String),
 }
 
+/// Schemas that apply to numbers.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Num {
+    /// Any number is ok.
     Any,
-    // The json-schema reference doesn't say this has to be an integer (and
-    // if it isn't an integer it doesn't specify how rounding is supposed to
-    // be handled).
-    MultipleOf(NotNan<f64>),
-    Maximum(NotNan<f64>),
-    Minimum(NotNan<f64>),
-    ExclusiveMinimum(NotNan<f64>),
-    ExclusiveMaximum(NotNan<f64>),
+    /// Asserts that a number is an integer multiple of something.
+    ///
+    /// We use exact arithmetic when the "something" is a non-integer; JSON-schema
+    /// isn't precise about the requirements in that case.
+    MultipleOf(Number),
+    Maximum(Number),
+    Minimum(Number),
+    ExclusiveMinimum(Number),
+    ExclusiveMaximum(Number),
     Integer,
 }
 
@@ -77,8 +105,8 @@ pub enum Arr {
         initial: Vec<Schema>,
         rest: Box<Schema>,
     },
-    MaxItems(u64),
-    MinItems(u64),
+    MaxItems(Number),
+    MinItems(Number),
     UniqueItems,
     Contains(Box<Schema>),
 }
@@ -371,10 +399,10 @@ impl Str {
         match self {
             Str::Any => type_contract(TypeF::String),
             Str::MaxLength(n) => {
-                mk_app!(ctx.js2n("string.MaxLength"), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("string.MaxLength"), num(n))
             }
             Str::MinLength(n) => {
-                mk_app!(ctx.js2n("string.MinLength"), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("string.MinLength"), num(n))
             }
             Str::Pattern(s) => mk_app!(ctx.js2n("string.Matches"), Term::Str(s.to_owned().into())),
         }
@@ -385,14 +413,14 @@ impl Num {
     pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
         match self {
             Num::Any => type_contract(TypeF::Number),
-            Num::MultipleOf(x) => mk_app!(ctx.js2n("number.MultipleOf"), num(*x)),
-            Num::Maximum(x) => mk_app!(ctx.js2n("number.Maximum"), num(*x)),
-            Num::Minimum(x) => mk_app!(ctx.js2n("number.Minimum"), num(*x)),
+            Num::MultipleOf(x) => mk_app!(ctx.js2n("number.MultipleOf"), num(x)),
+            Num::Maximum(x) => mk_app!(ctx.js2n("number.Maximum"), num(x)),
+            Num::Minimum(x) => mk_app!(ctx.js2n("number.Minimum"), num(x)),
             Num::ExclusiveMinimum(x) => {
-                mk_app!(ctx.js2n("number.ExclusiveMinimum"), num(*x))
+                mk_app!(ctx.js2n("number.ExclusiveMinimum"), num(x))
             }
             Num::ExclusiveMaximum(x) => {
-                mk_app!(ctx.js2n("number.ExclusiveMaximum"), num(*x))
+                mk_app!(ctx.js2n("number.ExclusiveMaximum"), num(x))
             }
             Num::Integer => ctx.std("number.Integer"),
         }
@@ -422,10 +450,10 @@ impl Arr {
                 )
             }
             Arr::MaxItems(n) => {
-                mk_app!(ctx.js2n("array.MaxItems"), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("array.MaxItems"), num(n))
             }
             Arr::MinItems(n) => {
-                mk_app!(ctx.js2n("array.MinItems"), Term::Num((*n).into()))
+                mk_app!(ctx.js2n("array.MinItems"), num(n))
             }
             Arr::UniqueItems => ctx.js2n("array.UniqueItems"),
             Arr::Contains(schema) => {

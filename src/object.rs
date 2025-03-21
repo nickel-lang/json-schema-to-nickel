@@ -8,7 +8,7 @@ use nickel_lang_core::{
         array::ArrayAttrs,
         make,
         record::{Field, FieldMetadata, RecordAttrs, RecordData},
-        LabeledType, RichTerm, Term, TypeAnnotation,
+        LabeledType, Number, RichTerm, Term, TypeAnnotation,
     },
     typ::{DictTypeFlavour, TypeF},
 };
@@ -17,15 +17,15 @@ use serde::Serialize;
 use crate::{
     contract::ContractContext,
     schema::Schema,
-    utils::{sequence, type_contract},
+    utils::{num, sequence, type_contract},
 };
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Obj {
     Any,
     Properties(ObjectProperties),
-    MaxProperties(u64),
-    MinProperties(u64),
+    MaxProperties(Number),
+    MinProperties(Number),
     Required(BTreeSet<String>),
     // This could be simplified maybe, because we're guaranteed that this will only need to validate strings.
     PropertyNames(Box<Schema>),
@@ -109,16 +109,10 @@ impl Obj {
                 )]
             }),
             Obj::MaxProperties(n) => {
-                vec![mk_app!(
-                    ctx.js2n("record.MaxProperties"),
-                    Term::Num((*n).into())
-                )]
+                vec![mk_app!(ctx.js2n("record.MaxProperties"), num(n))]
             }
             Obj::MinProperties(n) => {
-                vec![mk_app!(
-                    ctx.js2n("record.MinProperties"),
-                    Term::Num((*n).into())
-                )]
+                vec![mk_app!(ctx.js2n("record.MinProperties"), num(n))]
             }
             Obj::Required(names) => {
                 vec![mk_app!(
