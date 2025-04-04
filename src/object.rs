@@ -1,3 +1,8 @@
+//! Object schemas
+//!
+//! The schemas in the module correspond fairly closely to the ones documented
+//! [here](https://json-schema.org/draft-07/draft-handrews-json-schema-validation-01#rfc.section.6.5)
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use nickel_lang_core::{
@@ -20,23 +25,67 @@ use crate::{
     utils::{num, sequence, type_contract},
 };
 
+/// A schema for validating objects.
+///
+/// Unlike in JSON Schema, all of these schemas assert that the value is an
+/// object; in JSON Schema, the object validation keywords all assert that *if*
+/// the value is an object then it satisfies some additional properties.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub enum Obj {
+    /// Asserts that the value is an object, and nothing else.
     Any,
+    /// Validates the object's properties against sub-schemas.
     Properties(ObjectProperties),
+    /// Asserts an upper bound on the number of properties.
     MaxProperties(Number),
+    /// Asserts a lower bound on the number of properties.
     MinProperties(Number),
+    /// Asserts that the object contains certain properties.
     Required(BTreeSet<String>),
-    // This could be simplified maybe, because we're guaranteed that this will only need to validate strings.
+    /// Asserts that the names of all properties in the object satisfy
+    /// a schema.
+    ///
+    /// This could be simplified maybe, because we're guaranteed that this will
+    /// only need to validate strings.
     PropertyNames(Box<Schema>),
+    /// Asserts that if some properties are present then other properties
+    /// are also present.
+    ///
+    /// Specifically, if the map contains `(key, values)` and the object
+    /// contains the property named `key` then it must also contain all
+    /// the properties whose names are in `values`.
+    ///
+    /// TODO: consider simplifying the representation to contain only a
+    /// single `(key, values)` pair instead of a map. The general case can be
+    /// represented by wrapping the simplified cases in an `AllOf`.
     DependentFields(BTreeMap<String, Vec<String>>),
+    /// Asserts that if some properties are present then the entire object
+    /// satisfies some schema.
+    ///
+    /// Specifically, if the map contains `(key, schema)` and the object
+    /// contains the property named `key` then it must also satisfy `schema`.
+    ///
+    /// TODO: consider the same simplification as `DependentFields`.
     DependentSchemas(BTreeMap<String, Schema>),
 }
 
+/// The value in a JSON Schema "properties" object.
+///
+/// This would be most faithfully represented as just a `Schema`, but we
+/// track some additional data.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub struct Property {
+    /// A description of this property.
     pub doc: Option<String>,
+    /// The schema that applies to the property's value.
     pub schema: Schema,
+    /// Whether the property is optional.
+    ///
+    /// In JSON Schema "properties", all properties are optional; non-optional
+    /// properties are handled by the orthogonal "required" schema. To generate
+    /// better Nickel contracts, we support explicit optionality here. This is
+    /// always `true` when we first convert from JSON Schema, but transformations
+    /// might set it to `false`.
     pub optional: bool,
 }
 
@@ -50,14 +99,31 @@ impl From<Schema> for Property {
     }
 }
 
+/// Schemas for validating properties of an object.
+///
+/// This is a combination of the "properties", "patternProperties", and
+/// "additionalProperties" keywords in JSON Schema.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub struct ObjectProperties {
+    /// Schemas for named properties of this object.
     pub properties: BTreeMap<String, Property>,
+    /// Schemas for properties of this object whose names match regular
+    /// expressions.
+    ///
+    /// A property can get matched by more than one regular expression; all of
+    /// the matching schemas will be checked. Similarly, a property that already
+    /// matched a name in `properties` can get matched by a pattern here.
     pub pattern_properties: BTreeMap<String, Schema>,
+    /// A schema that's applied to all properties of this object that
+    /// were not matched by any names in `properties` or any patterns in
+    /// `pattern_properties`.
     pub additional_properties: Option<Box<Schema>>,
 }
 
 impl Obj {
+    /// Converts this object schema to a Nickel contract.
+    ///
+    /// Can return multiple contracts that should be applied in sequence.
     pub fn to_contract(&self, ctx: ContractContext) -> Vec<RichTerm> {
         match self {
             Obj::Any => vec![type_contract(TypeF::Dict {
@@ -160,6 +226,12 @@ impl Obj {
 }
 
 impl ObjectProperties {
+    /// Attempts to produce idiomatic Nickel record contracts from this schema.
+    ///
+    /// Our js2n contracts library contains functions for creating Nickel contracts
+    /// from arbitrary `ObjectProperties`, but the contracts it creates are not
+    /// record contracts and so they miss things like field documentation. This
+    /// method attempts to create a better contract, but it's allowed to fail.
     pub fn to_special_contract(&self, ctx: ContractContext) -> Option<Vec<RichTerm>> {
         let trivial_additional = matches!(
             self.additional_properties.as_deref(),

@@ -23,6 +23,7 @@ pub fn decode_json_ptr_part(part: &str) -> String {
     part.replace("~0", "~").replace("~1", "/")
 }
 
+/// Returns `true` if all the items in `items` are distinct.
 pub fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool {
     let mut seen = HashSet::new();
     for item in items {
@@ -33,6 +34,7 @@ pub fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool
     true
 }
 
+/// Creates a contract that for checking a Nickel type.
 pub fn type_contract(ty: TypeF<Box<Type>, RecordRows, EnumRows, RichTerm>) -> RichTerm {
     Term::Type {
         typ: ty.into(),
@@ -46,6 +48,7 @@ pub fn num(x: &Number) -> RichTerm {
     Term::Num(x.clone()).into()
 }
 
+/// Turns a collection of contracts into a single contract.
 pub fn sequence(mut contracts: Vec<RichTerm>) -> RichTerm {
     if contracts.len() == 1 {
         contracts.pop().unwrap()
