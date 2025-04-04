@@ -1,3 +1,9 @@
+//! Schema transforms
+//!
+//! When we first create our intermediate representation from a JSON Schema, it
+//! can be verbose and redundant. The transforms in this module preserve the
+//! semantics of the IR but simplify it.
+
 // TODO;
 // - in the github example, why doesn't the {_ | Dyn} in services get removed?
 // - simplify types in if/then expressions without an else
@@ -16,6 +22,11 @@ use crate::{
     utils::{distinct, sequence},
 };
 
+/// Merges nested `AllOf`s and `AnyOf`s.
+///
+/// For example, `AllOf(a, b, AllOf(c, d))` becomes `AllOf(a, b, c, d)`.
+///
+/// This transform also simplifies empty and singleton `AllOf`s and `AnyOf`s.
 pub fn flatten_logical_ops(schema: Schema) -> Schema {
     fn flatten_one(schema: Schema) -> Schema {
         match schema {
@@ -66,6 +77,8 @@ pub fn flatten_logical_ops(schema: Schema) -> Schema {
     schema.traverse(&mut flatten_one)
 }
 
+/// Attempts to convert `OneOf` to `AnyOf`, by detecting whether
+/// the alternatives are mutually exclusive.
 pub fn one_to_any(schema: Schema, refs: &AcyclicReferences) -> Schema {
     fn distinct_types(s: &[Schema], refs: &AcyclicReferences) -> bool {
         let simple_types = s
@@ -86,6 +99,8 @@ pub fn one_to_any(schema: Schema, refs: &AcyclicReferences) -> Schema {
     schema.traverse(&mut one_to_any_one)
 }
 
+/// Simplifies a schema by repeatedly applying transformations until we hit a
+/// fixed point.
 pub fn simplify(mut schema: Schema, refs: &AcyclicReferences) -> Schema {
     loop {
         let prev = schema.clone();
@@ -101,6 +116,40 @@ pub fn simplify(mut schema: Schema, refs: &AcyclicReferences) -> Schema {
     }
 }
 
+/// Inlines some references to the schemas that reference them.
+///
+/// As a motivating example from the github-workflow schema, they
+/// factor out some type definitions in "eventObject": the definition
+/// looks like
+///
+/// ```json
+///    "eventObject": {
+///      "oneOf": [
+///        {
+///          "type": "object"
+///        },
+///        {
+///          "type": "null"
+///        }
+///      ],
+///      "additionalProperties": true
+///    },
+/// ```
+///
+/// and gets used like
+///
+/// ```json
+///    "branch_protection_rule": {
+///      "$ref": "#/definitions/eventObject",
+///      "properties": {
+///        // ...
+///      }
+///    },
+/// ```
+///
+/// In particular, the schema using the ref doesn't have its own "type"
+/// annotation, which is annoying for our analysis. Inlining the definition
+/// fixes this annoyance.
 pub fn inline_refs(schema: Schema, refs: &AcyclicReferences) -> Schema {
     let mut inline_one = |schema: Schema| -> Schema {
         match schema {
@@ -123,6 +172,24 @@ pub fn inline_refs(schema: Schema, refs: &AcyclicReferences) -> Schema {
     schema.traverse(&mut inline_one)
 }
 
+/// Attempts to merge "required" and "properties" schemas.
+///
+/// In JSON Schema, "required" and "properties" are two orthogonal checks,
+/// but in Nickel we like to have optionality annotations on the properties.
+/// When this transform encounters
+///
+/// ```text
+/// AllOf([
+///   Required(["foo"]),
+///   Properties({
+///     foo -> ...
+///     bar -> ...
+///   })
+/// ])
+/// ```
+///
+/// it removes the "Required" and marks the "foo" in "Properties"
+/// as being non-optional.
 pub fn merge_required_properties(schema: Schema) -> Schema {
     let mut merge_one = |schema: Schema| -> Schema {
         match schema {
@@ -165,6 +232,9 @@ pub fn merge_required_properties(schema: Schema) -> Schema {
     schema.traverse(&mut merge_one)
 }
 
+/// When encountering an `AllOf` in which different elements have different
+/// sets of allowed types, propagates the intersection of the type sets to all
+/// elements.
 pub fn intersect_types(schema: Schema, refs: &AcyclicReferences) -> Schema {
     let mut intersect_one = |schema: Schema| -> Schema {
         match schema {
@@ -294,6 +364,22 @@ fn enumerate_regex(s: &str, max_expansion: usize) -> Option<Vec<String>> {
     Some(ret)
 }
 
+/// If a "patternProperties" has a regex that only matches a small set of strings, turns
+/// it into a "properties" schema that enumerates the strings.
+///
+/// Some real-world schemas use "patternProperties" just to save some repetition; for example,
+/// `github-workflow.json` has
+///
+/// ```json
+///   "patternProperties": {
+///     "^(branche|tag|path)s(-ignore)?$": {
+///       "type": "array"
+///     }
+///   },
+/// ```
+///
+/// We'd prefer to list out all the properties here, because then we can make a proper record
+/// contract.
 pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schema {
     fn try_expand_props(
         props: &ObjectProperties,
