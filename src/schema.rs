@@ -315,7 +315,7 @@ impl Schema {
             Schema::Boolean => vec![type_contract(TypeF::Bool)],
             Schema::Const(val) => {
                 let nickel_val: RichTerm = serde_json::from_value(val.clone()).unwrap();
-                if ctx.eager {
+                if ctx.is_eager() {
                     vec![mk_app!(ctx.js2n("Const"), nickel_val)]
                 } else {
                     vec![mk_app!(ctx.std("contract.Equal"), nickel_val)]
@@ -358,7 +358,7 @@ impl Schema {
             Schema::Array(arr) => vec![arr.to_contract(ctx)],
             Schema::Ref(s) => vec![ctx.ref_term(s)],
             Schema::AnyOf(vec) => {
-                let eager = ctx.eager || !eagerly_disjoint(vec.iter(), ctx.refs);
+                let eager = ctx.is_eager() || !eagerly_disjoint(vec.iter(), ctx.refs());
                 let ctx = if eager { ctx.eager() } else { ctx.lazy() };
                 let contracts = vec.iter().map(|s| sequence(s.to_contract(ctx))).collect();
                 vec![mk_app!(
@@ -432,7 +432,7 @@ impl Arr {
         match self {
             Arr::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
             Arr::AllItems(schema) => {
-                if ctx.eager {
+                if ctx.is_eager() {
                     mk_app!(ctx.js2n("array.ArrayOf"), sequence(schema.to_contract(ctx)))
                 } else {
                     type_contract(TypeF::Array(Box::new(

@@ -2,16 +2,12 @@
 // - in the github example, why doesn't the {_ | Dyn} in services get removed?
 // - simplify types in if/then expressions without an else
 
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet, HashSet},
-    ops::DerefMut,
-};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use nickel_lang_core::term::{make, record::RecordData, RichTerm, Term};
 
 use crate::{
-    contract::ContractContext,
+    contract::ContractContextData,
     object::{Obj, ObjectProperties},
     references::{resolve_all, AcyclicReferences},
     schema::Schema,
@@ -397,23 +393,11 @@ pub fn to_nickel(s: &Schema, refs: &AcyclicReferences, import_term: RichTerm) ->
     let refs_name = no_collisions_name(&shadowed_names, "refs");
     let lib_name = no_collisions_name(&shadowed_names, "js2n");
 
-    let always_eager = refs
-        .iter()
-        .map(|(name, schema)| (name, schema.is_always_eager(refs)))
-        .collect();
-    let accessed_refs = RefCell::new(BTreeSet::new());
-
-    let ctx = ContractContext {
-        refs,
-        lib_name: &lib_name,
-        refs_name: &refs_name,
-        eager: false,
-        always_eager_refs: &always_eager,
-        accessed_refs: &accessed_refs,
-    };
+    let ctx_data = ContractContextData::new(refs, &lib_name, &refs_name);
+    let ctx = ctx_data.ctx();
     let main_contract = s.to_contract(ctx);
 
-    let mut accessed = std::mem::take(ctx.accessed_refs.borrow_mut().deref_mut());
+    let mut accessed = ctx.take_accessed_refs();
     let mut refs_env = BTreeMap::new();
     let mut unfollowed_refs = accessed.clone();
     while !unfollowed_refs.is_empty() {
@@ -427,7 +411,7 @@ pub fn to_nickel(s: &Schema, refs: &AcyclicReferences, import_term: RichTerm) ->
             );
         }
 
-        let newly_accessed = std::mem::take(ctx.accessed_refs.borrow_mut().deref_mut());
+        let newly_accessed = ctx.take_accessed_refs();
         unfollowed_refs = newly_accessed.difference(&accessed).cloned().collect();
         accessed.extend(newly_accessed);
     }
@@ -441,9 +425,9 @@ pub fn to_nickel(s: &Schema, refs: &AcyclicReferences, import_term: RichTerm) ->
     });
 
     make::let_one_in(
-        ctx.lib_name,
+        ctx.lib_name(),
         import_term,
-        make::let_one_rec_in(ctx.refs_name, refs_dict, sequence(main_contract)),
+        make::let_one_rec_in(ctx.refs_name(), refs_dict, sequence(main_contract)),
     )
 }
 
