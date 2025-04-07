@@ -15,12 +15,29 @@ use nickel_lang_core::term::{make, record::RecordData, RichTerm, Term};
 use crate::{
     contract::ContractContextData,
     object::{Obj, ObjectProperties},
-    references::{resolve_all, AcyclicReferences},
+    references::AcyclicReferences,
     schema::Schema,
     traverse::Traverse,
     typ::InstanceTypeSet,
     utils::{distinct, sequence},
 };
+
+/// Simplifies a schema by repeatedly applying transformations until we hit a
+/// fixed point.
+pub fn simplify(mut schema: Schema, refs: &AcyclicReferences) -> Schema {
+    loop {
+        let prev = schema.clone();
+        schema = flatten_logical_ops(schema);
+        schema = one_to_any(schema, refs);
+        schema = intersect_types(schema, refs);
+        schema = merge_required_properties(schema);
+        schema = enumerate_regex_properties(schema, 8);
+
+        if schema == prev {
+            return schema;
+        }
+    }
+}
 
 /// Merges nested `AllOf`s and `AnyOf`s.
 ///
@@ -97,23 +114,6 @@ pub fn one_to_any(schema: Schema, refs: &AcyclicReferences) -> Schema {
     };
 
     schema.traverse(&mut one_to_any_one)
-}
-
-/// Simplifies a schema by repeatedly applying transformations until we hit a
-/// fixed point.
-pub fn simplify(mut schema: Schema, refs: &AcyclicReferences) -> Schema {
-    loop {
-        let prev = schema.clone();
-        schema = flatten_logical_ops(schema);
-        schema = one_to_any(schema, refs);
-        schema = intersect_types(schema, refs);
-        schema = merge_required_properties(schema);
-        schema = enumerate_regex_properties(schema, 8);
-
-        if schema == prev {
-            return schema;
-        }
-    }
 }
 
 /// Inlines some references to the schemas that reference them.
@@ -423,6 +423,11 @@ pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schem
     schema.traverse(&mut enumerate_one)
 }
 
+/// Collect (recursively) all the names of properties in this schema.
+///
+/// The Nickel contracts might create record contracts with these names; if
+/// we find a name that isn't in this collection, it's guaranteed not to be
+/// shadowed by any name in a generated contract.
 fn all_shadowed_names(s: &Schema) -> HashSet<String> {
     let mut ret = HashSet::new();
     let mut shadowed = |s: &Schema| {
@@ -435,6 +440,7 @@ fn all_shadowed_names(s: &Schema) -> HashSet<String> {
     ret
 }
 
+/// Create a variant of `prefix` that doesn't collide with any other names.
 fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
     let mut ret = prefix.to_owned();
     while taken_names.contains(&ret) {
@@ -443,38 +449,12 @@ fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
     ret
 }
 
-fn all_ref_names(s: &Schema) -> HashSet<String> {
-    let mut ret = HashSet::new();
-    let mut ref_name = |s: &Schema| {
-        if let Schema::Ref(s) = s {
-            ret.insert(s.clone());
-        }
-    };
-
-    s.traverse_ref(&mut ref_name);
-    ret
-}
-
-pub fn to_nickel(s: &Schema, refs: &AcyclicReferences, import_term: RichTerm) -> RichTerm {
-    let mut all_refs = all_ref_names(s);
-
-    let mut unfollowed_refs = all_refs.clone();
+/// Convert a schema to a nickel contract.
+///
+/// `lib_import` is a term that imports the json-schema library.
+pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTerm) -> RichTerm {
     let mut shadowed_names = all_shadowed_names(s);
-
-    while !unfollowed_refs.is_empty() {
-        let mut next_refs = HashSet::new();
-        for name in unfollowed_refs {
-            if let Some(schema) = refs.get(&name) {
-                let new_refs = all_ref_names(&schema);
-                let new_shadowed_names = all_shadowed_names(&schema);
-                next_refs.extend(new_refs);
-                shadowed_names.extend(new_shadowed_names);
-            }
-        }
-
-        unfollowed_refs = next_refs.difference(&all_refs).cloned().collect();
-        all_refs.extend(next_refs);
-    }
+    shadowed_names.extend(refs.schemas().flat_map(all_shadowed_names));
 
     let refs_name = no_collisions_name(&shadowed_names, "refs");
     let lib_name = no_collisions_name(&shadowed_names, "js2n");
@@ -483,12 +463,15 @@ pub fn to_nickel(s: &Schema, refs: &AcyclicReferences, import_term: RichTerm) ->
     let ctx = ctx_data.ctx();
     let main_contract = s.to_contract(ctx);
 
+    // Make contracts from the references also, and continue doing so until there are
+    // no unconverted references.
     let mut accessed = ctx.take_accessed_refs();
     let mut refs_env = BTreeMap::new();
     let mut unfollowed_refs = accessed.clone();
     while !unfollowed_refs.is_empty() {
         for (name, eager) in unfollowed_refs {
             // FIXME: once we convert to the new ast, make this an actual nested access
+            // For now, it's a single access with a name like "foo.bar".
             let names: Vec<_> = ctx.ref_name(&name, eager).collect();
             // unwrap: the context shouldn't collect missing references
             refs_env.insert(
@@ -512,24 +495,9 @@ pub fn to_nickel(s: &Schema, refs: &AcyclicReferences, import_term: RichTerm) ->
 
     make::let_one_in(
         ctx.lib_name(),
-        import_term,
+        lib_import,
         make::let_one_rec_in(ctx.refs_name(), refs_dict, sequence(main_contract)),
     )
-}
-
-pub fn convert(val: &serde_json::Value, lib_import: RichTerm) -> miette::Result<RichTerm> {
-    let schema: Schema = val.try_into()?;
-    let all_refs = resolve_all(val, &schema);
-    let refs = AcyclicReferences::new(&all_refs);
-    let simple_refs = all_refs
-        .iter()
-        .map(|(k, v)| (k.clone(), simplify(v.clone(), &refs)))
-        .collect();
-    let refs = AcyclicReferences::new(&simple_refs);
-    let schema = inline_refs(schema, &refs);
-    let schema = simplify(schema, &refs);
-
-    Ok(to_nickel(&schema, &refs, lib_import))
 }
 
 #[cfg(test)]

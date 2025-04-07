@@ -287,7 +287,8 @@ impl std::fmt::Display for SchemaPointer {
 /// access (e.g. `items/0`).
 ///
 /// `prefixItems` is a JSON Schema keyword that could be supported as well but it's unfortunately
-/// not supported by `schemars`, so we ignore it.
+/// not supported by `schemars` so we haven't yet added support.
+// TODO: now that we are no longer using schemars, support `prefixItems`.
 #[derive(Hash, Clone, Debug, Eq, PartialEq)]
 pub enum SchemaPointerElt {
     Definitions(String),
@@ -483,6 +484,11 @@ impl<'a> AcyclicReferences<'a> {
         self.inner
             .iter()
             .map(|(name, schema)| (name.as_str(), schema))
+    }
+
+    /// Iterate over all schemas.
+    pub fn schemas(&self) -> impl Iterator<Item = &Schema> {
+        self.inner.values()
     }
 }
 

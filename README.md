@@ -42,24 +42,16 @@ in {
 
 ## How it works
 
-We're using the [schemars][schemars] crate to parse
-JSON schema. A JSON schema encodes a predicate on JSON objects, that is, a
-function from JSON objects returning `true` or `false`. Such a function can also
-be written in Nickel and a big part of `json-schema-to-nickel` is mechanically
-generating such a predicate using a [Nickel library](./lib/predicates.ncl).
-However, such predicates are not ideal for use in Nickel and many aspects
-of JSON schema can be encoded as Nickel record contracts. The second major
-part of `json-schema-to-nickel` is figuring out when a JSON schema can be
-represented as a record contract, and generating this contract when it makes
-sense. Finally, there is some housekeeping to do for dispatching between these
-two functionalities.
-
-This two step process helps us to produce lazy contracts. Unfortunately, it's
-not possible to generally convert JSON schema predicates into lazy contracts.
-The problem lies with [union and intersection contracts][union-contracts]. But
-there are still many kinds of JSON schema predicates that *can* be expressed
-as lazy Nickel contracts and we try to do so whenever we can. However, we still
-need the fallback predicate when we can't.
+A JSON schema encodes a predicate on JSON objects, that is, a function from
+JSON objects returning `true` or `false`. Such a function can always be written
+as a Nickel contract and a big part of `json-schema-to-nickel` is mechanically
+generating such a contract using a [Nickel library](./lib/main.ncl).
+General JSON schema predicates cannot be converted to idiomatic Nickel contracts
+because JSON schema assumes eager evaluation (especially because of the
+[`anyOf`][union-contracts] and similar keywords) and most Nickel contracts are
+lazy. The second major part of `json-schema-to-nickel` is figuring out when a
+JSON schema can be represented as a lazy Nickel contract, and generating this
+contract when it makes sense.
 
 Additionally, lazy record contracts, when they can be produced, are much more
 useful for code inspection tools. For example, the Nickel language server can
@@ -75,9 +67,9 @@ and fall back to a strict predicate check only when absolutely necessary.
 
 ## Limitations
 
-- JSON schema comes in many dialects. We rely on [schemars][schemars] to
-  interpret schemas and this way should support any draft specification and
-  dialect that [schemars][schemars] does.
+- JSON schema comes in many dialects. We currently support draft 7, which is the
+  most widely used version. For example, it is the one supported by
+  [SchemaStore][schemastore].
 - The `format` keyword of JSON schema is currently ignored, [#24][i24]
 - Error reporting in contracts converted from predicates can be a bit hit or miss, [#27][i27]
 - The generated contracts might be more eager than expected. This chiefly
@@ -96,5 +88,5 @@ and fall back to a strict predicate check only when absolutely necessary.
 [i24]: https://github.com/nickel-lang/json-schema-to-nickel/issues/24
 [i25]: https://github.com/nickel-lang/json-schema-to-nickel/issues/25
 [i27]: https://github.com/nickel-lang/json-schema-to-nickel/issues/27
-[schemars]: https://crates.io/crates/schemars
+[schemastore]: https://github.com/SchemaStore/schemastore
 [union-contracts]: https://www.tweag.io/blog/2022-04-28-union-intersection-contracts/
