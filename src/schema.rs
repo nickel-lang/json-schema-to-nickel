@@ -357,15 +357,23 @@ impl Schema {
             Schema::Number(num) => vec![num.to_contract(ctx)],
             Schema::Array(arr) => vec![arr.to_contract(ctx)],
             Schema::Ref(s) => vec![ctx.ref_term(s)],
-            Schema::AnyOf(vec) => {
-                let eager = ctx.is_eager() || !eagerly_disjoint(vec.iter(), ctx.refs());
-                let ctx = if eager { ctx.eager() } else { ctx.lazy() };
-                let contracts = vec.iter().map(|s| sequence(s.to_contract(ctx))).collect();
-                vec![mk_app!(
-                    ctx.std("contract.any_of"),
-                    Term::Array(contracts, ArrayAttrs::default())
-                )]
-            }
+            Schema::AnyOf(vec) => match vec.as_slice() {
+                [Schema::Null, other] | [other, Schema::Null] => {
+                    vec![mk_app!(
+                        ctx.js2n("Nullable"),
+                        sequence(other.to_contract(ctx))
+                    )]
+                }
+                _ => {
+                    let eager = ctx.is_eager() || !eagerly_disjoint(vec.iter(), ctx.refs());
+                    let ctx = if eager { ctx.eager() } else { ctx.lazy() };
+                    let contracts = vec.iter().map(|s| sequence(s.to_contract(ctx))).collect();
+                    vec![mk_app!(
+                        ctx.std("contract.any_of"),
+                        Term::Array(contracts, ArrayAttrs::default())
+                    )]
+                }
+            },
             Schema::OneOf(vec) => {
                 let contracts = vec
                     .iter()
