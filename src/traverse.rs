@@ -1,3 +1,5 @@
+//! By-value and by-reference traversals of the schema tree.
+
 use std::collections::BTreeMap;
 
 use crate::{
@@ -5,11 +7,17 @@ use crate::{
     schema::{Arr, Schema},
 };
 
+/// A trait for traversing a generic structure.
+///
+/// Currently, we only ever have `T = Schema`, and all of the traversals are
+/// bottom-up.
 pub trait Traverse<T>: Sized {
+    /// Traverse by value, contructing a new tree.
     fn traverse<F>(self, f: &mut F) -> Self
     where
         F: FnMut(T) -> T;
 
+    /// Traverse by reference.
     fn traverse_ref<F>(&self, f: &mut F)
     where
         F: FnMut(&T);

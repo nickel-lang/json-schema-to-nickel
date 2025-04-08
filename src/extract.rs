@@ -1,3 +1,19 @@
+//! Conversion from JSON to our `Schema` intermediate representation
+//!
+//! The main public API of this module is the
+//! `TryFrom<serde_json::Value> for Schema` implementation, which tries
+//! to interpret a JSON value as a draft 7 JSON Schema.
+//!
+//! This conversion doesn't handle references: there may be parts of the
+//! JSON value that are referenced by the schema but aren't directly part of it
+//! (typically, children of the top-level "references" property). As a consequence,
+//! you should keep the JSON value around for resolving references, and then
+//! you can call `try_from` on those reference pointees.
+//!
+//! The error handing here could be improved, most notably by including source
+//! locations. `miette` is capable of producing nice error messages that embed
+//! source locations, but serde is currently stripping those locations out.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use miette::miette;
@@ -30,6 +46,9 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
             return Ok(Schema::Always);
         }
 
+        // Get all the declared types. We have some special handling for num_schemas here,
+        // because in JSON Schema "integer" is a type but for us "integer" is a schema on
+        // the "number" type.
         let mut num_schemas = Vec::new();
         let types = match obj.get("type") {
             Some(tys) => {
@@ -58,7 +77,26 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
             None => InstanceTypeSet::FULL,
         };
 
-        let mut and_schemas = Vec::new();
+        // We build up the schema as an "and" of "or"s. JSON Schema validators
+        // are implicitly "and"ed together, but the way we handle the different
+        // typed validators means there's an implicit "or" also. For example,
+        // if a JSON Schema has `properties`, `pattern`, and `allOf`, it means
+        //
+        // if it's an object then it must have some properties
+        // and
+        // if it's a string then it must match the pattern
+        // and
+        // ... all the stuff in the `allOf`.
+        //
+        // Since we prefer not to have so many if-thens, we represent this as
+        //
+        //   (it's an object with some properties
+        //    or
+        //    it's a string matching the pattern)
+        // and
+        // ... all the stuff in the `allOf`.
+        //
+        // That first "or" is the "implicit or", and it's members go here:
         let mut or_schemas = Vec::new();
 
         if types.contains(InstanceType::Null) {
@@ -105,6 +143,9 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
             or_schemas.push(Schema::AllOf(arr_schemas));
         }
 
+        // Now we collect the or-ed schemas with everything else
+        // into a big "and".
+        let mut and_schemas = Vec::new();
         if !or_schemas.is_empty() {
             and_schemas.push(Schema::AnyOf(or_schemas));
         }
@@ -171,6 +212,9 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
     }
 }
 
+/// Retrieve a number value from a map.
+///
+/// Returns `Ok(None)` if the field is missing, but an error if it's present and not a number.
 fn get_number(obj: &Map<String, Value>, field: &str) -> miette::Result<Option<Number>> {
     if let Some(val) = obj.get(field) {
         match val.as_number() {
@@ -192,6 +236,9 @@ fn get_number(obj: &Map<String, Value>, field: &str) -> miette::Result<Option<Nu
     }
 }
 
+/// Retrieve a string value from a map.
+///
+/// Returns `Ok(None)` if the field is missing, but an error if it's present and not a string.
 fn get_string(obj: &Map<String, Value>, field: &str) -> miette::Result<Option<String>> {
     if let Some(val) = obj.get(field) {
         match val.as_str() {
@@ -209,7 +256,7 @@ fn get_non_empty_array<'a>(
 ) -> miette::Result<Option<&'a Vec<Value>>> {
     if let Some(arr) = get_array(obj, field)? {
         if arr.is_empty() {
-            miette::bail!("{field} van't be empty")
+            miette::bail!("{field} can't be empty")
         } else {
             Ok(Some(arr))
         }
@@ -218,6 +265,9 @@ fn get_non_empty_array<'a>(
     }
 }
 
+/// Retrieve an array value from a map.
+///
+/// Returns `Ok(None)` if the field is missing, but an error if it's present and not an array.
 pub fn get_array<'a>(
     obj: &'a Map<String, Value>,
     field: &str,
@@ -232,6 +282,9 @@ pub fn get_array<'a>(
     }
 }
 
+/// Retrieve an object value from a map.
+///
+/// Returns `Ok(None)` if the field is missing, but an error if it's present and not an object.
 pub fn get_object<'a>(
     obj: &'a Map<String, Value>,
     field: &str,
@@ -246,6 +299,7 @@ pub fn get_object<'a>(
     }
 }
 
+/// Extract and return all the string validation schemas from this schema object.
 fn extract_string_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>> {
     let mut ret = Vec::new();
 
@@ -264,6 +318,7 @@ fn extract_string_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
     Ok(ret)
 }
 
+/// Extract and return all the number validation schemas from this schema object.
 fn extract_number_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>> {
     let mut ret = Vec::new();
 
@@ -286,6 +341,7 @@ fn extract_number_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
     Ok(ret)
 }
 
+/// Extract and return all the object validation schemas from this schema object.
 fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>> {
     let mut ret = Vec::new();
 
@@ -383,6 +439,7 @@ fn extract_object_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema
     Ok(ret)
 }
 
+/// Extract and return all the array validation schemas from this schema object.
 fn extract_array_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>> {
     let mut ret = Vec::new();
 
