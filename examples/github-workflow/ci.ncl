@@ -41,7 +41,5 @@
     },
   }
   & (import "github/matrix.ncl")
-  |> std.serialize 'Json
-  |> std.deserialize 'Json
 )
-  | (import "github-workflow.schema.ncl")
+  | ((import "github-workflow.schema.ncl") & { configs | optional | Dyn, matrix | optional | Dyn })
