@@ -11,7 +11,7 @@
       3 | Always
       ```
     "%
-    = std.contract.from_predicate (fun x => true),
+    = Dyn,
 
   Never
     | doc m%"
@@ -26,7 +26,7 @@
      3 | Never
      # => error
    "%
-    = std.contract.from_predicate (fun x => false),
+    = std.contract.from_predicate (fun _ => false),
 
   Null
     | doc m%"
@@ -40,7 +40,7 @@
       "foo" | Null
       # => error
    "%
-    = std.contract.from_predicate (fun x => x == null),
+    = std.contract.from_predicate ((==) null),
 
   Const
     | Dyn -> Dyn
@@ -102,7 +102,7 @@
     "%
     = fun variants =>
       std.contract.from_validator (fun value =>
-        let checkEqual = fun input variant =>
+        let check_equal = fun input variant =>
           input == variant || (std.is_enum input && (std.string.from_enum input == variant | Bool))
         in
         if std.array.any (checkEqual value) variants then
@@ -114,7 +114,7 @@
   Nullable
     : Dyn -> Dyn
     | doc m%"
-        For a contract `C`, `or_null C` returns a contract that allows either `C` or a null value.
+        For a contract `C`, `Nullable C` returns a contract that allows either `C` or a null value.
       "%
     = fun Contract =>
       std.contract.custom (fun label value =>

@@ -53,7 +53,7 @@ lazy. The second major part of `json-schema-to-nickel` is figuring out when a
 JSON schema can be represented as a lazy Nickel contract, and generating this
 contract when it makes sense.
 
-Additionally, lazy record contracts, when they can be produced, are much more
+Lazy record contracts, when they can be produced, are much more
 useful for code inspection tools. For example, the Nickel language server can
 offer completion information based on record contracts and `nickel doc` can
 extract structured documentation. When only a predicate check can be generated
