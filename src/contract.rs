@@ -8,25 +8,39 @@ use nickel_lang_core::term::RichTerm;
 use crate::{references::AcyclicReferences, utils::static_access};
 
 /// The owned part of a [`ContractContext`].
+///
+/// Keeps track of which json-schema refs were followed, so that the final
+/// generated Nickel can ignore things that it doesn't need.
 pub struct ContractContextData<'a, 'refs> {
+    /// All available json-schema refs.
     refs: &'a AcyclicReferences<'refs>,
+    /// The name that generated contracts should use to refer to the json-schema
+    /// lib. This name will be chosen in advance so that it is guaranteed never
+    /// to be shadowed by any name in the generated contracts.
     lib_name: &'a str,
+    /// The name that generated contracts should use to refer to the record
+    /// containing all the json-schema refs. Guaranteed not to be shadowed.
+    ///
+    /// For example, the json-schema ref "#/definitions/glob" can be found at
+    /// the Nickel path `<refs_name>."#/definitions/glob"`.
+    ///
+    /// (TODO: after switching to the new ast, this will be `<refs_name>.definitions.glob`.
+    /// Don't forget to update this doc!)
     refs_name: &'a str,
     /// In general, a json-schema reference might be followed in an eager context
     /// *and* in a lazy context, and so we'll have to generate both the lazy and
     /// eager versions of the contract that the reference points to. We can avoid
     /// this when the reference points to a schema that's always eager.
     always_eager_refs: BTreeMap<&'a str, bool>,
+    /// The set of refs that were accessed, and for each one whether it was
+    /// accessed in an eager context.
     accessed_refs: RefCell<BTreeSet<(String, bool)>>,
 }
 
 /// Maintains the context used while translating schemas to nickel contracts.
-///
-/// Most notably, this includes:
-///  - remembering whether a contract is forced to be eager
-///  - keeping track of which json-schema refs were followed
 #[derive(Clone, Copy)]
 pub struct ContractContext<'a, 'refs> {
+    /// Is the contract we're translating forced to be eager?
     eager: bool,
     inner: &'a ContractContextData<'a, 'refs>,
 }
@@ -66,6 +80,10 @@ impl<'refs> ContractContext<'_, 'refs> {
         static_access("std", path.split('.'))
     }
 
+    /// Splits a json-schema ref name into its path components.
+    ///
+    /// "#/definitions/glob" becomes `["definitions", "glob"]`
+    /// (or `["eager", "definitions", "glob"]` if it's eager).
     pub fn ref_name<'b>(
         &'b self,
         name: &'b str,
