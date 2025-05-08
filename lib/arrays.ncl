@@ -190,7 +190,7 @@
         ```
       "%
     = fun n =>
-      std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) >= n),
+      std.contract.from_predicate (fun arr => std.is_array arr && std.array.length (arr | Array Dyn) >= n),
 
   MaxItems
     : Number -> Dyn
@@ -206,5 +206,5 @@
         # => error
       "%
     = fun n =>
-      std.contract.from_predicate (fun arr => std.typeof arr == 'Array && std.array.length (arr | Array Dyn) <= n),
+      std.contract.from_predicate (fun arr => std.is_array arr && std.array.length (arr | Array Dyn) <= n),
 }

@@ -75,17 +75,17 @@
       # Examples
 
       ```nickel multiline
-      "hello" | std.string.Matches "^[a-z]+$"
+      "hello" | Matches "^[a-z]+$"
       # => "hello"
 
-      "42" | std.string.Matches "^[a-z]+$"
+      "42" | Matches "^[a-z]+$"
       # => error
       ```
     "%
     = fun regex =>
       let is_match = std.string.is_match regex in
       std.contract.custom (fun _label value =>
-        if std.typeof value != 'String then
+        if !(std.is_string value) then
           'Error { message = "expected a string" }
         else if is_match value then
           'Ok value

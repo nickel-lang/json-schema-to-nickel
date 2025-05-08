@@ -342,7 +342,7 @@ impl Schema {
                     ]
                 } else {
                     vec![mk_app!(
-                        ctx.js2n("enum"),
+                        ctx.js2n("Enum"),
                         Term::Array(
                             vec.iter()
                                 .map(|val| serde_json::from_value(val.clone()).unwrap())
@@ -380,7 +380,7 @@ impl Schema {
                     .map(|s| sequence(s.to_contract(ctx.eager())))
                     .collect();
                 vec![mk_app!(
-                    ctx.js2n("one_of"),
+                    ctx.js2n("OneOf"),
                     Term::Array(contracts, ArrayAttrs::default())
                 )]
             }
@@ -390,7 +390,7 @@ impl Schema {
                 let iph = sequence(iph.to_contract(ctx.eager()));
                 let then = sequence(then.to_contract(ctx));
                 let els = sequence(els.to_contract(ctx));
-                vec![mk_app!(ctx.js2n("if_then_else"), iph, then, els)]
+                vec![mk_app!(ctx.js2n("IfThenElse"), iph, then, els)]
             }
             Schema::Not(schema) => {
                 vec![mk_app!(
