@@ -3,10 +3,7 @@
     | Dyn -> Dyn
     | doc m%"
       An eager version of `Array`. `value | ArrayOf C` will succeed if `value` is an array and all of
-      its elements satisfy the contract `C`.
-
-      Only the eager part of `C` is checked; the lazy part is discarded.
-      TODO: actually, we should propagate it. Otherwise TagOrString won't work as expected
+      its elements satisfy the eager part of the contract `C`.
 
       # Examples
 
@@ -16,6 +13,9 @@
 
       [1, 2, 3] | ArrayOf String
       # => error
+
+      ["a", "b", "c"] | ArrayOf std.enum.TagOrString
+      # => ['a, 'b, 'c]
       ```
     "%
     = fun ctr =>
@@ -24,15 +24,15 @@
           'Error { message = "expected an array" }
         else
           value
-          |> std.array.fold_right
-            (fun elt acc =>
+          |> std.array.try_fold_left
+            (fun acc elt =>
               std.contract.check ctr label elt
               |> match {
-                'Ok _ => acc,
+                'Ok v => 'Ok (acc @ [v]),
                 'Error e => 'Error e
               }
             )
-            ('Ok value)
+            []
       ),
 
   Contains
@@ -54,6 +54,11 @@
 
       ["hi", true, 1] | Contains (Array Bool)
       # => error
+
+      # Lazy parts of the inner contract are ignored: "hi" does not get transformed
+      # to 'hi.
+      ["hi", true, 1] | Contains std.enum.TagOrString
+      # => ["hi", true, 1]
       ```
     "%
     = fun contract =>
