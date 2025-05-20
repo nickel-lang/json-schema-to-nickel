@@ -452,7 +452,7 @@ pub struct AcyclicReferences<'a> {
 }
 
 impl<'a> AcyclicReferences<'a> {
-    /// Wrap a map of references to protect from acyclic lookups.
+    /// Wrap a map of references to protect from cyclic lookups.
     pub fn new(inner: &'a BTreeMap<String, Schema>) -> Self {
         AcyclicReferences {
             inner,
