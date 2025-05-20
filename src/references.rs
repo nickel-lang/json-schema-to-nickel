@@ -208,6 +208,7 @@ impl SchemaPointer {
             .all(|elt| matches!(elt, SchemaPointerElt::Properties(_)))
     }
 
+    /// Returns the JSON value pointed to by `self` relative to `root`.
     pub fn resolve_in<'a>(&self, root: &'a Value) -> miette::Result<&'a Value> {
         let mut val = root;
         for elt in self.path.iter() {
@@ -385,6 +386,8 @@ impl std::fmt::Display for SchemaPointerParseError {
     }
 }
 
+/// Parses a JSON reference string, like `"#/properties/foo"`, or returns `None`
+/// if it's a format we don't support.
 pub fn parse_ptr(reference: &str) -> Option<SchemaPointer> {
     let Ok(uri) = fluent_uri::Uri::parse(reference) else {
         eprintln!(
@@ -520,7 +523,7 @@ fn resolve_references_one(value: &Value, schema: &Schema) -> BTreeMap<String, Sc
             if !refs.contains_key(s) {
                 match parse_ptr(s) {
                     None => {
-                        eprintln!("skipping unparseable pointer \"{s}\"");
+                        eprintln!("Warning: skipping unparseable pointer \"{s}\"");
                     }
                     Some(ptr) => match ptr.resolve_in(value) {
                         Ok(val) => match Schema::try_from(val) {
@@ -528,11 +531,11 @@ fn resolve_references_one(value: &Value, schema: &Schema) -> BTreeMap<String, Sc
                                 refs.insert(s.clone(), v);
                             }
                             Err(e) => {
-                                eprintln!("skipping pointer \"{s}\" because we failed to convert the pointee: {e}");
+                                eprintln!("Warning: skipping pointer \"{s}\" because we failed to convert the pointee: {e}");
                             }
                         },
                         Err(e) => {
-                            eprintln!("skipping pointer \"{s}\" because it failed to resolve: {e}");
+                            eprintln!("Warning: skipping pointer \"{s}\" because it failed to resolve: {e}");
                         }
                     },
                 }

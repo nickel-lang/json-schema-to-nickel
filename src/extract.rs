@@ -22,7 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     object::{Obj, ObjectProperties, Property},
-    schema::{Arr, Num, Schema, Str},
+    schema::{Array, Num, Schema, Str},
     typ::{InstanceType, InstanceTypeSet},
 };
 
@@ -137,7 +137,7 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
         if types.contains(InstanceType::Array) {
             let mut arr_schemas = extract_array_schemas(obj)?;
             if arr_schemas.is_empty() {
-                arr_schemas.push(Schema::Array(Arr::Any));
+                arr_schemas.push(Schema::Array(Array::Any));
             }
 
             or_schemas.push(Schema::AllOf(arr_schemas));
@@ -184,7 +184,7 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
                 None => Schema::Always,
             };
 
-            and_schemas.push(Schema::Ite {
+            and_schemas.push(Schema::IfThenElse {
                 iph: Box::new(iph),
                 then: Box::new(then),
                 els: Box::new(els),
@@ -444,22 +444,24 @@ fn extract_array_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>
     let mut ret = Vec::new();
 
     if let Some(max) = get_number(obj, "maxItems")? {
-        ret.push(Schema::Array(Arr::MaxItems(max)));
+        ret.push(Schema::Array(Array::MaxItems(max)));
     }
     if let Some(min) = get_number(obj, "minItems")? {
-        ret.push(Schema::Array(Arr::MinItems(min)));
+        ret.push(Schema::Array(Array::MinItems(min)));
     }
     if let Some(unique) = obj.get("uniqueItems") {
         if let Some(unique) = unique.as_bool() {
             if unique {
-                ret.push(Schema::Array(Arr::UniqueItems));
+                ret.push(Schema::Array(Array::UniqueItems));
             }
         } else {
             miette::bail!("\"uniqueItems\" must be a boolean");
         }
     }
     if let Some(contains) = obj.get("contains") {
-        ret.push(Schema::Array(Arr::Contains(Box::new(contains.try_into()?))));
+        ret.push(Schema::Array(Array::Contains(Box::new(
+            contains.try_into()?,
+        ))));
     }
 
     if let Some(items) = obj.get("items") {
@@ -473,13 +475,13 @@ fn extract_array_schemas(obj: &Map<String, Value>) -> miette::Result<Vec<Schema>
                 Some(add) => add.try_into()?,
                 None => Schema::Always,
             };
-            ret.push(Schema::Array(Arr::PerItem {
+            ret.push(Schema::Array(Array::PerItem {
                 initial,
                 rest: Box::new(rest),
             }));
         } else {
             // If items is a single item, we ignore additionalItems.
-            ret.push(Schema::Array(Arr::AllItems(Box::new(items.try_into()?))));
+            ret.push(Schema::Array(Array::AllItems(Box::new(items.try_into()?))));
         }
     }
 

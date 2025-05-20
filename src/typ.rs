@@ -3,7 +3,7 @@
 use std::str::FromStr;
 
 use crate::object::Obj;
-use crate::schema::{Arr, Num, Schema, Str};
+use crate::schema::{Array, Num, Schema, Str};
 
 /// The six types in JSON.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -30,7 +30,7 @@ impl InstanceType {
             InstanceType::Null => Schema::Null,
             InstanceType::Boolean => Schema::Boolean,
             InstanceType::Object => Schema::Object(Obj::Any),
-            InstanceType::Array => Schema::Array(Arr::Any),
+            InstanceType::Array => Schema::Array(Array::Any),
             InstanceType::Number => Schema::Number(Num::Any),
             InstanceType::String => Schema::String(Str::Any),
         }

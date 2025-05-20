@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     object::{Obj, ObjectProperties, Property},
-    schema::{Arr, Schema},
+    schema::{Array, Schema},
 };
 
 /// A trait for traversing a generic structure.
@@ -43,7 +43,7 @@ impl Traverse<Schema> for Schema {
             Schema::AnyOf(vec) => Schema::AnyOf(vec.traverse(f)),
             Schema::OneOf(vec) => Schema::OneOf(vec.traverse(f)),
             Schema::AllOf(vec) => Schema::AllOf(vec.traverse(f)),
-            Schema::Ite { iph, then, els } => Schema::Ite {
+            Schema::IfThenElse { iph, then, els } => Schema::IfThenElse {
                 iph: iph.traverse(f),
                 then: then.traverse(f),
                 els: els.traverse(f),
@@ -73,7 +73,7 @@ impl Traverse<Schema> for Schema {
             Schema::AnyOf(vec) => vec.traverse_ref(f),
             Schema::OneOf(vec) => vec.traverse_ref(f),
             Schema::AllOf(vec) => vec.traverse_ref(f),
-            Schema::Ite { iph, then, els } => {
+            Schema::IfThenElse { iph, then, els } => {
                 iph.traverse_ref(f);
                 then.traverse_ref(f);
                 els.traverse_ref(f);
@@ -218,19 +218,19 @@ impl Traverse<Schema> for Obj {
     }
 }
 
-impl Traverse<Schema> for Arr {
+impl Traverse<Schema> for Array {
     fn traverse<F>(self, f: &mut F) -> Self
     where
         F: FnMut(Schema) -> Schema,
     {
         match self {
-            Arr::Any | Arr::MaxItems(_) | Arr::MinItems(_) | Arr::UniqueItems => self,
-            Arr::AllItems(schema) => Arr::AllItems(schema.traverse(f)),
-            Arr::PerItem { initial, rest } => Arr::PerItem {
+            Array::Any | Array::MaxItems(_) | Array::MinItems(_) | Array::UniqueItems => self,
+            Array::AllItems(schema) => Array::AllItems(schema.traverse(f)),
+            Array::PerItem { initial, rest } => Array::PerItem {
                 initial: initial.traverse(f),
                 rest: rest.traverse(f),
             },
-            Arr::Contains(schema) => Arr::Contains(schema.traverse(f)),
+            Array::Contains(schema) => Array::Contains(schema.traverse(f)),
         }
     }
 
@@ -239,13 +239,13 @@ impl Traverse<Schema> for Arr {
         F: FnMut(&Schema),
     {
         match self {
-            Arr::Any | Arr::MaxItems(_) | Arr::MinItems(_) | Arr::UniqueItems => {}
-            Arr::AllItems(schema) => schema.traverse_ref(f),
-            Arr::PerItem { initial, rest } => {
+            Array::Any | Array::MaxItems(_) | Array::MinItems(_) | Array::UniqueItems => {}
+            Array::AllItems(schema) => schema.traverse_ref(f),
+            Array::PerItem { initial, rest } => {
                 initial.traverse_ref(f);
                 rest.traverse_ref(f);
             }
-            Arr::Contains(schema) => schema.traverse_ref(f),
+            Array::Contains(schema) => schema.traverse_ref(f),
         }
     }
 }

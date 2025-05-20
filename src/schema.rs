@@ -46,7 +46,7 @@ pub enum Schema {
     /// Asserts that the value is a number, possibly with some additional constraints.
     Number(Num),
     /// Asserts that the value is an array, possibly with some additional constraints.
-    Array(Arr),
+    Array(Array),
     /// A reference to another schema.
     ///
     /// The string is a JSON-schema path, like "#/definitions/foo" or "#/properties/bar".
@@ -58,7 +58,7 @@ pub enum Schema {
     /// Asserts that all of the contained schemas succeed.
     AllOf(Vec<Schema>),
     /// If `iph` succeeds, asserts that `then` does also. Otherwise, asserts that `els` succeeds.
-    Ite {
+    IfThenElse {
         iph: Box<Schema>,
         then: Box<Schema>,
         els: Box<Schema>,
@@ -90,24 +90,38 @@ pub enum Num {
     /// We use exact arithmetic when the "something" is a non-integer; JSON-schema
     /// isn't precise about the requirements in that case.
     MultipleOf(Number),
+    /// Asserts that a number is at most some value.
     Maximum(Number),
+    /// Asserts that a number is at least some value.
     Minimum(Number),
+    /// Asserts that a number is strictly less than some value.
     ExclusiveMinimum(Number),
+    /// Asserts that a number is strictly greater than some value.
     ExclusiveMaximum(Number),
+    /// Asserts that a number is an integer.
     Integer,
 }
 
+/// Schemas that apply to arrays.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
-pub enum Arr {
+pub enum Array {
+    /// Any array is ok.
     Any,
+    /// Asserts that all items in this array satisfy a schema.
     AllItems(Box<Schema>),
+    /// Asserts that the first several items in this array satisfy individual
+    /// schemas, and the remaining items satisfy the `rest` schema.
     PerItem {
         initial: Vec<Schema>,
         rest: Box<Schema>,
     },
+    /// Asserts that this array has at most a certain number of elements.
     MaxItems(Number),
+    /// Asserts that this array has at least.
     MinItems(Number),
+    /// Asserts that all items in this array are distinct.
     UniqueItems,
+    /// Asserts that this array contains at least one value satisfying the given schema.
     Contains(Box<Schema>),
 }
 
@@ -127,6 +141,12 @@ fn apparent_types<'a>(values: impl IntoIterator<Item = &'a Value>) -> InstanceTy
 }
 
 impl Schema {
+    /// Does this schema match just a single type of object? If so, return that type.
+    ///
+    /// This is best-effort: it may return `None` even when the schema does in fact
+    /// match a single type. Unlike [`Schema::just_type`], this method doesn't insist
+    /// that the schema is *only* a type-check. For example, if the schema is an
+    /// object schema with some properties then we will return `Some(InstanceType::Object)`.
     pub fn simple_type(&self, refs: &AcyclicReferences) -> Option<InstanceType> {
         fn simple_type_rec<'s>(
             slf: &'s Schema,
@@ -159,7 +179,7 @@ impl Schema {
                     }
                     intersection.to_singleton()
                 }
-                Schema::Ite { els, .. } => els.simple_type(refs),
+                Schema::IfThenElse { .. } => None,
                 Schema::Not(_) => None,
             }
         }
@@ -167,18 +187,24 @@ impl Schema {
         simple_type_rec(self, refs)
     }
 
+    /// Is this schema just a single type with no other constraints?
+    ///
+    /// If so, return that type.
     pub fn just_type(&self) -> Option<InstanceType> {
         match self {
             Schema::Null => Some(InstanceType::Null),
             Schema::Boolean => Some(InstanceType::Boolean),
             Schema::Object(Obj::Any) => Some(InstanceType::Object),
-            Schema::Array(Arr::Any) => Some(InstanceType::Array),
+            Schema::Array(Array::Any) => Some(InstanceType::Array),
             Schema::String(Str::Any) => Some(InstanceType::String),
             Schema::Number(Num::Any) => Some(InstanceType::Number),
             _ => None,
         }
     }
 
+    /// Is this schema just a set of types with no other constraints?
+    ///
+    /// If so, return that set.
     pub fn just_type_set(&self) -> Option<InstanceTypeSet> {
         if let Some(ty) = self.just_type() {
             Some(InstanceTypeSet::singleton(ty))
@@ -189,6 +215,11 @@ impl Schema {
         }
     }
 
+    /// Returns a set of types that might be accepted by this schema.
+    ///
+    /// The returned set is conservative, in the sense that it might be larger
+    /// than necessary. Unlike `Self::allowed_types`, we don't recurse into
+    /// sub-schemas. Instead, we're just extra-conservative.
     pub fn allowed_types_shallow(&self, refs: &AcyclicReferences) -> InstanceTypeSet {
         match self {
             Schema::Always => InstanceTypeSet::FULL,
@@ -212,12 +243,20 @@ impl Schema {
                 .unwrap_or(InstanceTypeSet::FULL),
             Schema::OneOf(_) => InstanceTypeSet::FULL,
             Schema::AllOf(_) => InstanceTypeSet::FULL,
-            Schema::Ite { .. } => InstanceTypeSet::FULL,
+            Schema::IfThenElse { .. } => InstanceTypeSet::FULL,
             Schema::Not(_) => InstanceTypeSet::FULL,
         }
     }
 
-    // TODO: may be worth memoizing something
+    /// Returns a set of types that might be accepted by this schema.
+    ///
+    /// The returned set is conservative, in the sense that it might be larger
+    /// than necessary. Unlike `Self::allowed_types_shallow`, we recurse into
+    /// subschemas to try and gain some extra precision. As a result, this could
+    /// be slow (linear in the size of `self`).
+    ///
+    /// If this becomes a performance issue, it should be possible to memoize
+    /// the allowed types of subschemas.
     pub fn allowed_types(&self, refs: &AcyclicReferences) -> InstanceTypeSet {
         match self {
             Schema::Always => InstanceTypeSet::FULL,
@@ -247,11 +286,17 @@ impl Schema {
                 }
                 intersection
             }
-            Schema::Ite { .. } => InstanceTypeSet::FULL,
+            Schema::IfThenElse { .. } => InstanceTypeSet::FULL,
             Schema::Not(_) => InstanceTypeSet::FULL,
         }
     }
 
+    /// Is the most idiomatic Nickel contract for this schema an eager contract?
+    ///
+    /// For example, if this is an object schema with some properties then the
+    /// most idiomatic Nickel contract would be a record contract (which is not
+    /// eager). On the other hand, shallower schemas (like number schemas) are
+    /// typically eager.
     pub fn is_always_eager(&self, refs: &AcyclicReferences) -> bool {
         match self {
             Schema::Always
@@ -287,26 +332,32 @@ impl Schema {
                 Obj::DependentSchemas(deps) => deps.values().all(|s| s.is_always_eager(refs)),
             },
             Schema::Array(arr) => match arr {
-                Arr::Any
-                | Arr::MaxItems(_)
-                | Arr::MinItems(_)
-                | Arr::UniqueItems
-                | Arr::Contains(_) => true,
-                Arr::AllItems(schema) => schema.is_always_eager(refs),
-                Arr::PerItem { initial, rest } => {
+                Array::Any
+                | Array::MaxItems(_)
+                | Array::MinItems(_)
+                | Array::UniqueItems
+                | Array::Contains(_) => true,
+                Array::AllItems(schema) => schema.is_always_eager(refs),
+                Array::PerItem { initial, rest } => {
                     initial.iter().all(|s| s.is_always_eager(refs)) && rest.is_always_eager(refs)
                 }
             },
             Schema::AnyOf(vec) | Schema::OneOf(vec) | Schema::AllOf(vec) => {
                 vec.iter().all(|s| s.is_always_eager(refs))
             }
-            Schema::Ite { iph, then, els } => {
+            Schema::IfThenElse { iph, then, els } => {
                 iph.is_always_eager(refs) && then.is_always_eager(refs) && els.is_always_eager(refs)
             }
             Schema::Not(schema) => schema.is_always_eager(refs),
         }
     }
 
+    /// Converts this schema into a collection of Nickel contracts.
+    ///
+    /// This returns a collection of Nickel contracts, and you need to apply them all
+    /// (or combine them using `std.contract.Sequence`). The reason we return a
+    /// collection instead of combining them for you is so that if you're applying
+    /// these contracts to a record field then you can apply them individually.
     pub fn to_contract(&self, ctx: ContractContext) -> Vec<RichTerm> {
         match self {
             Schema::Always => vec![ctx.js2n("Always")],
@@ -385,7 +436,7 @@ impl Schema {
                 )]
             }
             Schema::AllOf(vec) => vec.iter().flat_map(|s| s.to_contract(ctx)).collect(),
-            Schema::Ite { iph, then, els } => {
+            Schema::IfThenElse { iph, then, els } => {
                 // The "if" contract always needs to be checked eagerly.
                 let iph = sequence(iph.to_contract(ctx.eager()));
                 let then = sequence(then.to_contract(ctx));
@@ -435,11 +486,11 @@ impl Num {
     }
 }
 
-impl Arr {
+impl Array {
     pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
         match self {
-            Arr::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
-            Arr::AllItems(schema) => {
+            Array::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
+            Array::AllItems(schema) => {
                 if ctx.is_eager() {
                     mk_app!(ctx.js2n("array.ArrayOf"), sequence(schema.to_contract(ctx)))
                 } else {
@@ -448,7 +499,7 @@ impl Arr {
                     )))
                 }
             }
-            Arr::PerItem { initial, rest } => {
+            Array::PerItem { initial, rest } => {
                 let initial = initial.iter().map(|s| sequence(s.to_contract(ctx)));
                 let rest = sequence(rest.to_contract(ctx));
                 mk_app!(
@@ -457,14 +508,14 @@ impl Arr {
                     rest
                 )
             }
-            Arr::MaxItems(n) => {
+            Array::MaxItems(n) => {
                 mk_app!(ctx.js2n("array.MaxItems"), num(n))
             }
-            Arr::MinItems(n) => {
+            Array::MinItems(n) => {
                 mk_app!(ctx.js2n("array.MinItems"), num(n))
             }
-            Arr::UniqueItems => ctx.js2n("array.UniqueItems"),
-            Arr::Contains(schema) => {
+            Array::UniqueItems => ctx.js2n("array.UniqueItems"),
+            Array::Contains(schema) => {
                 let contract = sequence(schema.to_contract(ctx.eager()));
                 mk_app!(ctx.js2n("array.Contains"), contract)
             }

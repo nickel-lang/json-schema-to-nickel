@@ -41,6 +41,8 @@ pub enum Obj {
     /// Asserts a lower bound on the number of properties.
     MinProperties(Number),
     /// Asserts that the object contains certain properties.
+    ///
+    /// TODO: maybe we can get rid of this by representing it with `Properties`
     Required(BTreeSet<String>),
     /// Asserts that the names of all properties in the object satisfy
     /// a schema.

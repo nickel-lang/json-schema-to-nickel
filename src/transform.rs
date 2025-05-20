@@ -24,6 +24,9 @@ use crate::{
 
 /// Simplifies a schema by repeatedly applying transformations until we hit a
 /// fixed point.
+///
+/// This could be slow: every iteration through the fixed-point-finding loop is
+/// linear in the schema size.
 pub fn simplify(mut schema: Schema, refs: &AcyclicReferences) -> Schema {
     loop {
         let prev = schema.clone();
@@ -280,6 +283,7 @@ pub fn intersect_types(schema: Schema, refs: &AcyclicReferences) -> Schema {
     schema.traverse(&mut intersect_one)
 }
 
+/// If the regex in `s` only matches a small number of strings, list them all out.
 fn enumerate_regex(s: &str, max_expansion: usize) -> Option<Vec<String>> {
     use regex_syntax::hir::{Hir, HirKind, Look};
     // TODO: maybe we should signal an error (probably while constructing the schema) if
@@ -428,7 +432,7 @@ pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schem
 /// The Nickel contracts might create record contracts with these names; if
 /// we find a name that isn't in this collection, it's guaranteed not to be
 /// shadowed by any name in a generated contract.
-fn all_shadowed_names(s: &Schema) -> HashSet<String> {
+fn all_names(s: &Schema) -> HashSet<String> {
     let mut ret = HashSet::new();
     let mut shadowed = |s: &Schema| {
         if let Schema::Object(Obj::Properties(props)) = s {
@@ -453,8 +457,8 @@ fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
 ///
 /// `lib_import` is a term that imports the json-schema library.
 pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTerm) -> RichTerm {
-    let mut shadowed_names = all_shadowed_names(s);
-    shadowed_names.extend(refs.schemas().flat_map(all_shadowed_names));
+    let mut shadowed_names = all_names(s);
+    shadowed_names.extend(refs.schemas().flat_map(all_names));
 
     let refs_name = no_collisions_name(&shadowed_names, "refs");
     let lib_name = no_collisions_name(&shadowed_names, "js2n");
@@ -466,6 +470,7 @@ pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTe
     // Make contracts from the references also, and continue doing so until there are
     // no unconverted references.
     let mut accessed = ctx.take_accessed_refs();
+    // TODO: see if IndexMap would be faster
     let mut refs_env = BTreeMap::new();
     let mut unfollowed_refs = accessed.clone();
     while !unfollowed_refs.is_empty() {
