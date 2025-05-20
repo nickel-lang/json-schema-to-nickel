@@ -59,10 +59,10 @@ fn inline_imports(path: impl Into<OsString>) -> Result<RichTerm, Box<dyn Error>>
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let lib = inline_imports("./lib/predicates.ncl")?;
+    let lib = inline_imports("./lib/main.ncl")?;
 
     let out_dir = env::var_os("OUT_DIR").ok_or("environment variable OUT_DIR doesn't exist")?;
-    let gen_lib_path = Path::new(&out_dir).join("predicates.ncl");
+    let gen_lib_path = Path::new(&out_dir).join("main.ncl");
     fs::write(gen_lib_path, format!("{lib}"))?;
     Ok(())
 }

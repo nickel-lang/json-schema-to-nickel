@@ -1,0 +1,28 @@
+---
+source: tests/transforms.rs
+expression: schema
+---
+Object(Properties(ObjectProperties(
+  properties: {
+    "my_object": Property(
+      doc: None,
+      schema: AnyOf([
+        String(Any),
+        Object(Properties(ObjectProperties(
+          properties: {
+            "foo": Property(
+              doc: None,
+              schema: Number(Any),
+              optional: true,
+            ),
+          },
+          pattern_properties: {},
+          additional_properties: None,
+        ))),
+      ]),
+      optional: true,
+    ),
+  },
+  pattern_properties: {},
+  additional_properties: None,
+)))
