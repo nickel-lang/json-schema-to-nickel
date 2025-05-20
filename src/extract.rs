@@ -96,7 +96,7 @@ impl<'a> TryFrom<&'a serde_json::Value> for Schema {
         // and
         // ... all the stuff in the `allOf`.
         //
-        // That first "or" is the "implicit or", and it's members go here:
+        // That first "or" is the "implicit or", and its members go here:
         let mut or_schemas = Vec::new();
 
         if types.contains(InstanceType::Null) {
