@@ -462,8 +462,9 @@ pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTe
 
     let refs_name = no_collisions_name(&shadowed_names, "refs");
     let lib_name = no_collisions_name(&shadowed_names, "js2n");
+    let std_name = no_collisions_name(&shadowed_names, "std");
 
-    let ctx_data = ContractContextData::new(refs, &lib_name, &refs_name);
+    let ctx_data = ContractContextData::new(refs, &lib_name, &std_name, &refs_name);
     let ctx = ctx_data.ctx();
     let main_contract = s.to_contract(ctx);
 
@@ -498,9 +499,13 @@ pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTe
         ..Default::default()
     });
 
-    make::let_one_in(
-        ctx.lib_name(),
-        lib_import,
+    let mut bindings = vec![(ctx.lib_name(), lib_import)];
+    if ctx.std_name() != "std" {
+        bindings.push((ctx.std_name(), Term::Var("std".into()).into()));
+    };
+    make::let_in(
+        false,
+        bindings,
         make::let_one_rec_in(ctx.refs_name(), refs_dict, sequence(main_contract)),
     )
 }
