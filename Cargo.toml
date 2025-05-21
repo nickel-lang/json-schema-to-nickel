@@ -39,3 +39,8 @@ stringreader = "^0.1"
 name = "transforms"
 path = "tests/transforms.rs"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+harness = false

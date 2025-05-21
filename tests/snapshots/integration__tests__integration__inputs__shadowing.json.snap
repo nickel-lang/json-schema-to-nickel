@@ -1,0 +1,30 @@
+---
+source: tests/integration.rs
+expression: out
+---
+let js2n_
+  = FAKE_JS2N_LIB,
+  std_
+  = std
+  in
+let rec refs__
+    = {
+      "definitions.foo" =
+        std_.contract.any_of
+            [
+              js2n_.Null,
+              Bool,
+              Number,
+              String,
+              { foo | Number | optional, .. },
+              Array Dyn
+            ],
+    }
+    in
+  {
+      js2n | Number | optional,
+      refs | Number | optional,
+      refs_ | Number | optional,
+      std | refs__."definitions.foo" | optional,
+      ..
+    }
