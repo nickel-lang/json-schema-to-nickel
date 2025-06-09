@@ -46,9 +46,6 @@ jobs:
           experimental-features = nix-command flakes
           accept-flake-config = true
 
-    - name: Magic Nix Cache
-      uses: DeterminateSystems/magic-nix-cache-action@main
-
     - name: Run all checks
       run: |
         nix flake check --print-build-logs
