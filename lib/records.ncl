@@ -1,4 +1,4 @@
-let ErrData = { message | optional | String, notes | optional | Array String } in
+let ErrData = { message | optional | String, notes | optional | Array String, blame_location | optional | Dyn } in
 {
   MaxProperties
     | Number -> Dyn
