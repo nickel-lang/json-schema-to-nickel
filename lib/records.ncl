@@ -365,29 +365,6 @@ let ErrData = { message | optional | String, notes | optional | Array String, bl
             value
       ),
 
-  # TODO: replace with std.record.FieldsMatch once that's in a nickel release
-  FieldsMatch
-    | String -> Dyn
-    = fun regex =>
-      let is_match = std.string.is_match regex in
-      std.contract.from_validator (fun x =>
-        if !std.is_record x then
-          'Error { message = "expected a record" }
-        else
-          let bad_field_names =
-            std.record.fields x
-            |> std.array.filter (fun k => !(is_match k))
-            |> std.array.map (fun k => m%""${k}""%)
-          in
-          if std.array.length bad_field_names > 0 then
-            'Error {
-              message = "invalid field names %{std.string.join "," bad_field_names}",
-              notes = ["expected fields to match %{regex}"]
-            }
-          else
-            'Ok
-      ),
-
   PropertyNames
     | Dyn -> Dyn
     | doc m%"
