@@ -13,7 +13,7 @@ license = "MIT OR Apache-2.0"
 clap = { version = "^4.3", features = ["derive"] }
 fluent-uri = "0.1.4"
 miette = "7.5.0"
-nickel-lang-core = { version = "0.10", default-features = false }
+nickel-lang-core = { version = "0.12", default-features = false }
 
 pretty = "^0.11"
 regex-syntax = "0.8.5"
@@ -23,7 +23,7 @@ terminal_size = "^0.2"
 
 [build-dependencies]
 # TODO: make this definitionally the same as the non-build dependency
-nickel-lang-core = { version = "0.10", default-features = false }
+nickel-lang-core = { version = "0.12", default-features = false }
 
 [dev-dependencies]
 glob = "0.3.2"
