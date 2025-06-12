@@ -18,6 +18,10 @@ pub struct ContractContextData<'a, 'refs> {
     /// lib. This name will be chosen in advance so that it is guaranteed never
     /// to be shadowed by any name in the generated contracts.
     lib_name: &'a str,
+    /// The name that generated contracts should use to refer to the standard library.
+    /// This name will be chosen in advance so that it is guaranteed never
+    /// to be shadowed by any name in the generated contracts.
+    std_name: &'a str,
     /// The name that generated contracts should use to refer to the record
     /// containing all the json-schema refs. Guaranteed not to be shadowed.
     ///
@@ -46,7 +50,12 @@ pub struct ContractContext<'a, 'refs> {
 }
 
 impl<'a, 'refs> ContractContextData<'a, 'refs> {
-    pub fn new(refs: &'a AcyclicReferences<'refs>, lib_name: &'a str, refs_name: &'a str) -> Self {
+    pub fn new(
+        refs: &'a AcyclicReferences<'refs>,
+        lib_name: &'a str,
+        std_name: &'a str,
+        refs_name: &'a str,
+    ) -> Self {
         let always_eager = refs
             .iter()
             .map(|(name, schema)| (name, schema.is_always_eager(refs)))
@@ -54,6 +63,7 @@ impl<'a, 'refs> ContractContextData<'a, 'refs> {
         Self {
             refs,
             lib_name,
+            std_name,
             refs_name,
             always_eager_refs: always_eager,
             accessed_refs: RefCell::new(BTreeSet::new()),
@@ -76,8 +86,7 @@ impl<'refs> ContractContext<'_, 'refs> {
 
     /// Returns a Nickel term pointing to a path in the standard library.
     pub fn std(&self, path: &str) -> RichTerm {
-        // TODO: protect the name "std" against shadowing
-        static_access("std", path.split('.'))
+        static_access(self.inner.std_name, path.split('.'))
     }
 
     /// Splits a json-schema ref name into its path components.
@@ -121,6 +130,15 @@ impl<'refs> ContractContext<'_, 'refs> {
     /// avoid name collisions.
     pub fn lib_name(&self) -> &str {
         self.inner.lib_name
+    }
+
+    /// Returns the name that the generated contracts use to refer to the
+    /// standard library.
+    ///
+    /// This is probably just "std", but it might be modified to
+    /// avoid name collisions.
+    pub fn std_name(&self) -> &str {
+        self.inner.std_name
     }
 
     /// Returns the name that the generated contracts use to refer to our

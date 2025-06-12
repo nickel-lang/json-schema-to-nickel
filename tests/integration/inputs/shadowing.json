@@ -1,0 +1,27 @@
+{
+  "$comment": "important names should never be shadowed",
+  "type": "object",
+  "definitions": {
+    "foo": {
+      "properties": {
+        "foo": {
+          "type": "number"
+        }
+      }
+    }
+  },
+  "properties": {
+    "std": {
+      "$ref": "#/definitions/foo"
+    },
+    "js2n": {
+      "type": "number"
+    },
+    "refs": {
+      "type": "number"
+    },
+    "refs_": {
+      "type": "number"
+    }
+  }
+}
