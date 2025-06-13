@@ -88,50 +88,81 @@ fn gather_tests(name: String, path: &Path, ignore_regex: &Regex) -> Vec<Trial> {
 
 const SKIP_TESTS: &[&str] = &[
     "optional\\/format.*",
-    "definitions_0_1.*", // contains an external reference (remote URI)
+    // contains an external reference (remote URI)
+    "definitions_0_1.*",
     "id_.*",
-    "maxItems_1_.*",      // schemars doesn't accept floats as the value of `maxItems`
-    "maxLength_1_.*",     // schemars doesn't accept floats as the value of `maxLength`
-    "maxProperties_1_.*", // schemars doesn't accept floats as the value of `maxProperties`
-    "minItems_1_.*",      // schemars doesn't accept floats as the value of `minItems`
-    "minLength_1_.*",     // schemars doesn't accept floats as the value of `minLength`
-    "minProperties_1_.*", // schemars doesn't accept floats as the value of `minProperties`
+    // schemars doesn't accept floats as the value of `maxItems`
+    "maxItems_1_.*",
+    // schemars doesn't accept floats as the value of `maxLength`
+    "maxLength_1_.*",
+    // schemars doesn't accept floats as the value of `maxProperties`
+    "maxProperties_1_.*",
+    // schemars doesn't accept floats as the value of `minItems`
+    "minItems_1_.*",
+    // schemars doesn't accept floats as the value of `minLength`
+    "minLength_1_.*",
+    // schemars doesn't accept floats as the value of `minProperties`
+    "minProperties_1_.*",
     "optional/bignum.*",
     "optional/content.*",
     "optional/cross-draft.*",
     "optional/ecmascript-regex.*",
-    "refRemote_.*", // no.
+    // no.
+    "refRemote_.*",
     // TODO: make reference handling robust
     // The following are references that aren't yet handled by js2n (remote URIs, local files
     // and non-top level definitions)
-    "ref_0_3.*",  // reference to the whole schema `#` not yet supported
-    "ref_12_1.*", // reference to bare URI `node` (no fragment, no leading slash). Should fail
+
+    // reference to the whole schema `#` not yet supported
+    "ref_0_3.*",
+    // reference to bare URI `node` (no fragment, no leading slash). Should fail
     // because invalid, but js2n replace that by a `Dyn` contract
-    "ref_14_1.*", // reference to an anchor "#foo" not yet supported
-    "ref_15_1.*", // anchor + remote URI
-    "ref_16_1.*", // external reference (remote URI)
-    "ref_18_0.*", // reference to a local definition ("#/definitions/inner" but the definition
+    "ref_12_1.*",
+    // reference to an anchor "#foo" not yet supported
+    "ref_14_1.*",
+    // anchor + remote URI
+    "ref_15_1.*",
+    // external reference (remote URI)
+    "ref_16_1.*",
+    // reference to a local definition ("#/definitions/inner" but the definition
     // isn't at the top-level? I'm not even sure how it should be handled in all
     // generality) + absolute local URI
-    "ref_18_1.*", // Same as ref_18_0
-    // generality) + absolute local URI
-    "ref_18_2.*", // external reference (local file URI)
-    "ref_19_2.*", // external reference (local file URI),
-    "ref_19_0.*", // Same as refs_18_0
-    "ref_19_1.*", // Same as refs_18_0
-    "ref_20_1.*", // external reference (remote URI)
-    "ref_21_1.*", // urn:uuid URI scheme not supported
-    "ref_26_1.*", // urn:uuid URI scheme not supported
-    "ref_27_1.*", // urn:uuid URI scheme not supported,
-    "ref_28_0.*", // external reference (remote URI)
-    "ref_29_0.*", // external reference (remote URI)
-    "ref_30_0.*", // external reference (remote URI)
-    "ref_31_1.*", // external reference (absolute path /absref/foobar.json)
-    "ref_5_1.*",  // not related to external ref, but js2n doesn't properly ignore other components
+    "ref_18_0.*",
+    // Same as ref_18_0
+    "ref_18_1.*",
+    // external reference (local file URI)
+    "ref_18_2.*",
+    // external reference (local file URI),
+    "ref_19_2.*",
+    // Same as refs_18_0
+    "ref_19_0.*",
+    // Same as refs_18_0
+    "ref_19_1.*",
+    // external reference (remote URI)
+    "ref_20_1.*",
+    // urn:uuid URI scheme not supported
+    "ref_21_1.*",
+    // urn:uuid URI scheme not supported
+    "ref_26_1.*",
+    // urn:uuid URI scheme not supported,
+    "ref_27_1.*",
+    // external reference (remote URI)
+    "ref_28_0.*",
+    // external reference (remote URI)
+    "ref_29_0.*",
+    // external reference (remote URI)
+    "ref_30_0.*",
+    // external reference (absolute path /absref/foobar.json)
+    "ref_31_1.*",
+    // not related to external ref, but js2n doesn't properly ignore other components
     // when the `ref` field is used
-    "ref_6_0.*",         // reference to a local file (foo.json)
-    "ref_7_1.*",         // external reference (remote URI)
-    "unknownKeyword_.*", // we don't handle `$id` at all, yet
+    "ref_5_1.*",
+    // reference to a local file (foo.json)
+    "ref_6_0.*",
+    // external reference (remote URI)
+    "ref_7_1.*",
+    // we don't handle `$id` at all, yet
+    "unknownKeyword_.*",
 ];
 
 fn translation_typecheck_test(
