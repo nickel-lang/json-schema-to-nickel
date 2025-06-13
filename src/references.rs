@@ -29,52 +29,23 @@
 //!
 //! At the end, we can elaborate the required special values like `___nickel_defs` and only include
 //! the actually used in the final contract, to avoid bloating the result.
-use fluent_uri;
-use std::{borrow::Cow, collections::HashSet};
-
-use nickel_lang_core::{
-    identifier::LocIdent,
-    term::{
-        record::{Field, FieldMetadata, RecordData},
-        LetAttrs, RichTerm, Term,
-    },
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashSet},
 };
 
-use schemars::schema::{RootSchema, Schema, SchemaObject, SingleOrVec};
+use fluent_uri;
+use miette::miette;
+
+use nickel_lang_core::term::RichTerm;
+use serde_json::Value;
 
 use crate::{
-    contracts::{AsPredicateContract, Contract, Documentation, TryAsContract},
-    predicates::{AsPredicate, Predicate},
+    extract::{get_array, get_object},
+    schema::Schema,
+    traverse::Traverse as _,
     utils::{decode_json_ptr_part, static_access},
-    ENVIRONMENT_ID, MANGLING_PREFIX,
 };
-
-/// Specify if a reference is used in a context which requires a contract or a predicate.
-#[derive(Clone, Debug, Copy)]
-pub enum RefUsageContext {
-    Contract,
-    Predicate,
-}
-
-impl RefUsageContext {
-    /// Generate a default conversion for the given usage, when the reference can't be found, can't
-    /// be supported, etc. For contracts, it's the `Dyn` contract, and the always true predicate.
-    pub fn default_term(&self) -> RichTerm {
-        match self {
-            RefUsageContext::Contract => Contract::dynamic().into(),
-            RefUsageContext::Predicate => Predicate::always().into(),
-        }
-    }
-}
-
-impl std::fmt::Display for RefUsageContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RefUsageContext::Contract => write!(f, "contract"),
-            RefUsageContext::Predicate => write!(f, "predicate"),
-        }
-    }
-}
 
 /// A representation of a field path in the final generated contract.
 ///
@@ -230,30 +201,6 @@ impl SchemaPointer {
         FieldPath::try_from(stripped?).ok()
     }
 
-    /// Returns a Nickel term that accesses the value pointed by `self` by looking it up either in
-    /// the references environment or directly in the final contract for pure property paths.
-    pub fn access(&self, usage: RefUsageContext) -> RichTerm {
-        match (self.try_as_field_path(), usage) {
-            // The case of pure property paths is special, as we access them directly from within
-            // the final contract, instead of looking them up in the references environment.
-            (Some(field_path), RefUsageContext::Contract) => field_path.into(),
-            _ => static_access(ENVIRONMENT_ID, [self.nickel_uid(usage).as_str()]),
-        }
-    }
-
-    /// Returns a single mangled string uniquely identifying this pointer and its usage. This name
-    /// is used to store the reference in (and load it from) the references environment.
-    pub fn nickel_uid(&self, usage: RefUsageContext) -> String {
-        let path = self
-            .path
-            .iter()
-            .map(|elt| elt.to_string())
-            .collect::<Vec<_>>()
-            .join("/");
-
-        format!("{MANGLING_PREFIX}:{path}!{usage}")
-    }
-
     /// Returns `true` if the path is composed only of properties.
     pub fn is_only_props(&self) -> bool {
         self.path
@@ -261,200 +208,63 @@ impl SchemaPointer {
             .all(|elt| matches!(elt, SchemaPointerElt::Properties(_)))
     }
 
-    /// Returns the subschema pointed to by `self` in the given schema object.
-    ///
-    /// `'schema` is the lifetime of the original root schema, from where schema references (in the
-    /// Rust sense) are taken.
-    ///
-    /// # Return values
-    ///
-    /// - Returns `Some(subschema)` if the path exists in the schema and points to `subschema`.
-    /// - Returns `None` if the path does not exist in the schema or the path is empty.
-    ///
-    /// This method returns a `Cow`, because depending on the path, it might have to serialize new
-    /// schemas on the fly, which then have to be carried around as owned values. But in most
-    /// cases, it will just keep references to components of the original schema.
-    ///
-    /// Note: it looks like we could return the original value upon empty path, but there's a type
-    /// mismatch: we get a `SchemaObject` reference, and we must return a `Schema` reference. We
-    /// can't convert between the two (we can convert between the owned variants easily, but not
-    /// for references). Since we can special case empty paths before calling [Self::resolve] if
-    /// really needed, it's simpler to just return `None` here.
-    pub fn resolve<'schema>(
-        &self,
-        root_schema: &'schema RootSchema,
-    ) -> Option<Cow<'schema, Schema>> {
-        enum CurrentSchema<'schema> {
-            Schema(&'schema Schema),
-            Root(&'schema RootSchema),
-        }
-
-        impl<'schema> CurrentSchema<'schema> {
-            fn object<'a>(&'a self) -> Option<&'schema SchemaObject> {
-                match self {
-                    CurrentSchema::Schema(Schema::Object(obj)) => Some(obj),
-                    CurrentSchema::Schema(Schema::Bool(_)) => None,
-                    CurrentSchema::Root(root) => Some(&root.schema),
+    /// Returns the JSON value pointed to by `self` relative to `root`.
+    pub fn resolve_in<'a>(&self, root: &'a Value) -> miette::Result<&'a Value> {
+        let mut val = root;
+        for elt in self.path.iter() {
+            match elt {
+                SchemaPointerElt::Definitions(name) => {
+                    let Some(obj) = val.as_object() else {
+                        miette::bail!("cannot look up definitions in a non-object");
+                    };
+                    val = get_object(obj, "definitions")?
+                        .ok_or_else(|| miette!("no definitions"))?
+                        .get(name)
+                        .ok_or_else(|| miette!("missing {name}"))?;
                 }
-            }
+                SchemaPointerElt::Properties(name) => {
+                    let Some(obj) = val.as_object() else {
+                        miette::bail!("cannot look up {} in a non-object", elt.name());
+                    };
+                    let Some(props) = get_object(obj, "properties")? else {
+                        miette::bail!("no \"properties\" field");
+                    };
+                    val = props
+                        .get(name)
+                        .ok_or_else(|| miette!("field {name} not found"))?;
+                }
+                SchemaPointerElt::ItemsIndexed(i)
+                | SchemaPointerElt::AllOf(i)
+                | SchemaPointerElt::AnyOf(i)
+                | SchemaPointerElt::OneOf(i) => {
+                    let Some(obj) = val.as_object() else {
+                        miette::bail!("cannot look up {} in a non-object", elt.name());
+                    };
+
+                    let field = get_array(obj, elt.name())?
+                        .ok_or_else(|| miette!("field {} not found", elt.name()))?;
+
+                    val = field
+                        .get(*i)
+                        .ok_or_else(|| miette!("array has no index {i}"))?;
+                }
+                SchemaPointerElt::ItemsSingle
+                | SchemaPointerElt::Contains
+                | SchemaPointerElt::AdditionalProperties
+                | SchemaPointerElt::Not
+                | SchemaPointerElt::Then
+                | SchemaPointerElt::Else => {
+                    let Some(obj) = val.as_object() else {
+                        miette::bail!("cannot look up {} in a non-object", elt.name());
+                    };
+
+                    val = obj
+                        .get(elt.name())
+                        .ok_or(miette!("field {} not found", elt.name()))?;
+                }
+            };
         }
-
-        fn warn_if_out_of_bounds<T>(vec: &[T], index: usize, keyword: &str) {
-            if index >= vec.len() {
-                eprintln!(
-                    "Warning: out-of-bounds array access `{keyword}/{index}` in a reference. \
-                    {keyword} has only {} element(s)",
-                    vec.len()
-                );
-            }
-        }
-
-        // Actual resolution logic. We have to make this function a bit more general than the
-        // parent one, because we might nest calls to `resolve_from`. The issue is that when we
-        // encounter nested definitions, those aren't properly represented in schemars. We can
-        // still work around it by finding them in the `extensions` field of the object, but we
-        // have to convert a JSON value to a schema on the fly.
-        //
-        // Because we just created this value locally, it can't be borrowed for the original
-        // `'schema`, and it's very annoying to adapt to potentially owned values (if possible at
-        // all, as it probably requires to propagate `Cow<'schema, _>` everywhere, including in
-        // schemars types).
-        //
-        // As often in Rust, it's simpler to nest function calls in order to convince the compiler
-        // that the lifetimes are properly nested as well.
-        fn resolve_from<'ptr, 'schema>(
-            mut it: impl Iterator<Item = &'ptr SchemaPointerElt>,
-            mut current: CurrentSchema<'schema>,
-        ) -> Option<Cow<'schema, Schema>> {
-            // We don't use a for loop, because this would move `it`, but we need it for the
-            // recursive call to `resolve_from` in the case of nested definitions.
-            while let Some(elt) = it.next() {
-                let new = match elt {
-                    SchemaPointerElt::Definitions(name) => {
-                        if let CurrentSchema::Root(root) = current {
-                            root.definitions.get(name).map(CurrentSchema::Schema)
-                        } else {
-                            // schemars doesn't represent nested definitions, but in practice they
-                            // are still present in the generic `extensions` field, so we can work
-                            // it out by reserializing the JSON value manually.
-                            let def_value = current
-                                .object()?
-                                .extensions
-                                .get("definitions")?
-                                .get(name)?
-                                .clone();
-
-                            let def: Schema = serde_json::from_value(def_value).ok()?;
-
-                            // This is where we use the recursive call to make it possible to
-                            // operate on a shorter `'schema` that `def` can outlive.
-                            let result = resolve_from(it, CurrentSchema::Schema(&def))?;
-
-                            // However, once done, we get a reference with a lifetime strictly
-                            // smaller to the initial `'schema`. This is why the return type of the
-                            // parent method has a `Cow` in it, so that we can return an owned
-                            // value.
-                            return Some(Cow::Owned(result.into_owned()));
-                        }
-                    }
-                    SchemaPointerElt::Properties(prop) => current
-                        .object()?
-                        .object
-                        .as_ref()?
-                        .properties
-                        .get(prop)
-                        .map(CurrentSchema::Schema),
-                    SchemaPointerElt::AdditionalProperties => current
-                        .object()?
-                        .object
-                        .as_ref()?
-                        .additional_properties
-                        .as_ref()
-                        .map(|s| CurrentSchema::Schema(s.as_ref())),
-                    SchemaPointerElt::ItemsIndexed(index) => {
-                        match current.object()?.array.as_ref()?.items.as_ref() {
-                            Some(SingleOrVec::Vec(vec)) => {
-                                warn_if_out_of_bounds(vec, *index, "items");
-                                vec.get(*index).map(CurrentSchema::Schema)
-                            }
-                            Some(SingleOrVec::Single(_)) => {
-                                eprintln!(
-                                    "Warning: trying to access `items` at index {index} in a \
-                                    reference, but `items` is a single schema in the current \
-                                    document, not an array"
-                                );
-
-                                None
-                            }
-                            _ => None,
-                        }
-                    }
-                    SchemaPointerElt::ItemsSingle => match &current.object()?.array.as_ref()?.items
-                    {
-                        Some(SingleOrVec::Single(sub)) => Some(CurrentSchema::Schema(sub.as_ref())),
-                        Some(SingleOrVec::Vec(_)) => {
-                            eprintln!(
-                                "Warning: trying to access `items` in a reference without an \
-                                index, but `items` is an array of schemas in the current \
-                                document, not a single schema"
-                            );
-
-                            None
-                        }
-                        _ => None,
-                    },
-                    SchemaPointerElt::Contains => Some(CurrentSchema::Schema(
-                        current.object()?.array.as_ref()?.contains.as_ref()?,
-                    )),
-                    SchemaPointerElt::AllOf(index) => {
-                        let all_of = current.object()?.subschemas.as_ref()?.all_of.as_ref()?;
-                        warn_if_out_of_bounds(all_of, *index, "allOf");
-                        all_of.get(*index).map(CurrentSchema::Schema)
-                    }
-                    SchemaPointerElt::AnyOf(index) => {
-                        let any_of = current.object()?.subschemas.as_ref()?.any_of.as_ref()?;
-                        warn_if_out_of_bounds(any_of, *index, "anyOf");
-                        any_of.get(*index).map(CurrentSchema::Schema)
-                    }
-                    SchemaPointerElt::OneOf(index) => {
-                        let one_of = current.object()?.subschemas.as_ref()?.one_of.as_ref()?;
-                        warn_if_out_of_bounds(one_of, *index, "oneOf");
-                        one_of.get(*index).map(CurrentSchema::Schema)
-                    }
-                    SchemaPointerElt::Not => current
-                        .object()?
-                        .subschemas
-                        .as_ref()?
-                        .not
-                        .as_ref()
-                        .map(|s| CurrentSchema::Schema(s)),
-                    SchemaPointerElt::Then => current
-                        .object()?
-                        .subschemas
-                        .as_ref()?
-                        .then_schema
-                        .as_ref()
-                        .map(|s| CurrentSchema::Schema(s)),
-                    SchemaPointerElt::Else => current
-                        .object()?
-                        .subschemas
-                        .as_ref()?
-                        .else_schema
-                        .as_ref()
-                        .map(|s| CurrentSchema::Schema(s.as_ref())),
-                }?;
-
-                current = new;
-            }
-
-            if let CurrentSchema::Schema(current) = current {
-                Some(Cow::Borrowed(current))
-            } else {
-                None
-            }
-        }
-
-        resolve_from(self.path.iter(), CurrentSchema::Root(root_schema))
+        Ok(val)
     }
 }
 
@@ -478,7 +288,8 @@ impl std::fmt::Display for SchemaPointer {
 /// access (e.g. `items/0`).
 ///
 /// `prefixItems` is a JSON Schema keyword that could be supported as well but it's unfortunately
-/// not supported by `schemars`, so we ignore it.
+/// not supported by `schemars` so we haven't yet added support.
+// TODO: now that we are no longer using schemars, support `prefixItems`.
 #[derive(Hash, Clone, Debug, Eq, PartialEq)]
 pub enum SchemaPointerElt {
     Definitions(String),
@@ -502,6 +313,25 @@ pub enum SchemaPointerElt {
     Not,
     Then,
     Else,
+}
+
+impl SchemaPointerElt {
+    pub fn name(&self) -> &str {
+        match self {
+            SchemaPointerElt::Definitions(_) => "definitions",
+            SchemaPointerElt::Properties(_) => "properties",
+            SchemaPointerElt::AdditionalProperties => "additionalProperties",
+            SchemaPointerElt::ItemsIndexed(_) => "items",
+            SchemaPointerElt::ItemsSingle => "items",
+            SchemaPointerElt::Contains => "contains",
+            SchemaPointerElt::AllOf(_) => "allOf",
+            SchemaPointerElt::AnyOf(_) => "anyOf",
+            SchemaPointerElt::OneOf(_) => "oneOf",
+            SchemaPointerElt::Not => "not",
+            SchemaPointerElt::Then => "then",
+            SchemaPointerElt::Else => "else",
+        }
+    }
 }
 
 impl std::fmt::Display for SchemaPointerElt {
@@ -556,90 +386,9 @@ impl std::fmt::Display for SchemaPointerParseError {
     }
 }
 
-/// The conversion of a JSON schema reference pointee (a definition, a property, or any subschema
-/// really) into a Nickel predicate or contract.
-#[derive(Clone)]
-pub struct ConvertedRef {
-    /// The schema pointer leading to this reference.
-    pointer: SchemaPointer,
-    /// The usage context of the reference.
-    usage: RefUsageContext,
-    /// The documentation associated with the reference pointee.
-    doc: Option<Documentation>,
-    /// The translation of the pointed schema into a Nickel term.
-    term: RichTerm,
-}
-
-impl ConvertedRef {
-    /// Return this reference as a Nickel record binding as it appears in the references environment,
-    /// that is a pair of an identifier and a field value.
-    pub fn into_binding(self) -> (LocIdent, Field) {
-        (self.pointer.nickel_uid(self.usage).into(), self.into())
-    }
-}
-
-impl From<ConvertedRef> for Field {
-    fn from(value: ConvertedRef) -> Self {
-        Field {
-            value: Some(value.term),
-            metadata: FieldMetadata {
-                doc: value.doc.map(String::from),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-}
-
-/// State recording which references are actually used and how (as predicates or as contracts).
-#[derive(Clone, Default)]
-pub struct RefsUsage {
-    /// The references used as predicates somewhere in the schema.
-    pub predicates: HashSet<SchemaPointer>,
-    /// The references used as contracts somewhere in the schema (excluding properties).
-    pub contracts: HashSet<SchemaPointer>,
-}
-
-impl RefsUsage {
-    /// The empty state
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Return the tuple of set difference between the predicates and the contracts referenced in
-    /// `self` and referenced in `other`.
-    pub fn diff(&self, other: &RefsUsage) -> RefsUsage {
-        RefsUsage {
-            predicates: &self.predicates - &other.predicates,
-            contracts: &self.contracts - &other.contracts,
-        }
-    }
-
-    /// Extend the usages of `self` with the usages of `other`.
-    pub fn extend(&mut self, other: RefsUsage) {
-        self.predicates.extend(other.predicates);
-        self.contracts.extend(other.contracts);
-    }
-
-    /// Record the usage of a JSON Schema reference.
-    pub fn record_usage(&mut self, reference: SchemaPointer, usage: RefUsageContext) {
-        // We don't record a contract usage of a property reference.
-        if !(reference.is_only_props() && matches!(usage, RefUsageContext::Contract)) {
-            match usage {
-                RefUsageContext::Contract => {
-                    self.contracts.insert(reference);
-                }
-                RefUsageContext::Predicate => {
-                    self.predicates.insert(reference);
-                }
-            }
-        }
-    }
-}
-
-/// Parses a JSON schema reference to a `SchemaPointer`, returning `None` and printing
-/// a warning if it's a kind of reference that we don't support.
-pub fn parse_ref(reference: &str) -> Option<SchemaPointer> {
+/// Parses a JSON reference string, like `"#/properties/foo"`, or returns `None`
+/// if it's a format we don't support.
+pub fn parse_ptr(reference: &str) -> Option<SchemaPointer> {
     let Ok(uri) = fluent_uri::Uri::parse(reference) else {
         eprintln!(
             "Warning: skipping reference `{reference}` (replaced by an always succeeding \
@@ -699,158 +448,137 @@ pub fn parse_ref(reference: &str) -> Option<SchemaPointer> {
     }
 }
 
-/// Resolve a JSON schema reference to a Nickel term. The resulting Nickel expression will have a
-/// different shape depending on the usage context and the type of reference (definition vs
-/// property).
-///
-/// # Arguments
-///
-/// - `reference`: the JSON schema reference to resolve. It must be a valid URI. Currently only
-///   local references are supported (i.e. URI starting with `#/`).
-/// - `refs_usage`: the state used to record which references are actually used, and
-///   how. `resolve_ref` will record this usage accordingly
-/// - `usage`: the context in which the reference is used. Some contexts requires a predicate,
-///   while other can do with a contract.
-pub fn resolve_ref(
-    reference: &str,
-    refs_usage: &mut RefsUsage,
-    usage: RefUsageContext,
-) -> RichTerm {
-    fn resolve_opt(
-        reference: &str,
-        refs_usage: &mut RefsUsage,
-        usage: RefUsageContext,
-    ) -> Option<RichTerm> {
-        let schema_ptr = parse_ref(reference)?;
-        refs_usage.record_usage(schema_ptr.clone(), usage);
-        Some(schema_ptr.access(usage))
-    }
-
-    resolve_opt(reference, refs_usage, usage).unwrap_or_else(|| usage.default_term())
+/// A reference map that avoids looping on cyclic references.
+pub struct AcyclicReferences<'a> {
+    inner: &'a BTreeMap<String, Schema>,
+    blackholed: RefCell<HashSet<&'a str>>,
 }
 
-/// An environment of all reference pointees and their conversions into Nickel predicates and
-/// contracts.
-#[derive(Clone, Default)]
-pub struct Environment {
-    /// The list of all references used in the schema.
-    references: Vec<ConvertedRef>,
-}
-
-impl Environment {
-    /// The empty environment
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
-    /// Create an environment from the top-level JSON schema and the record usage of refs during
-    /// the conversion of this schema to a Nickel contract or predicate.
-    ///
-    /// Note that we have to repeat the creation process: when converting the referenced
-    /// subschemas, those subschemas might themselves reference other subschemas that were not used
-    /// until now. We record those usages as well, and iterate until no new definition is ever
-    /// referenced.
-    pub fn new(root_schema: &RootSchema, mut refs_usage: RefsUsage) -> Self {
-        let mut references =
-            Vec::with_capacity(refs_usage.predicates.len() + refs_usage.contracts.len());
-
-        // The stack of references to process. We might grow this stack as converting some
-        // references might refer to new subschemas.
-        let mut ref_stack: Vec<_> = refs_usage
-            .predicates
-            .iter()
-            .map(|ptr| (ptr.clone(), RefUsageContext::Predicate))
-            .chain(
-                refs_usage
-                    .contracts
-                    .iter()
-                    .map(|ptr| (ptr.clone(), RefUsageContext::Contract)),
-            )
-            .collect();
-
-        while let Some((schema_ptr, usage)) = ref_stack.pop() {
-            let mut new_refs_usage = RefsUsage::new();
-
-            let (doc, term) = {
-                if let Some(schema) = schema_ptr.resolve(root_schema) {
-                    let doc = Documentation::try_from(schema.as_ref()).ok();
-
-                    let term = match usage {
-                        RefUsageContext::Contract => schema
-                            .try_as_contract(root_schema, &mut new_refs_usage)
-                            .unwrap_or_else(|| schema.as_predicate_contract(&mut new_refs_usage))
-                            .into(),
-                        RefUsageContext::Predicate => {
-                            schema.as_predicate(&mut new_refs_usage).into()
-                        }
-                    };
-
-                    (doc, term)
-                } else {
-                    eprintln!(
-                        "Warning: definition `{schema_ptr}` is referenced in the schema \
-                        but couldn't be found. Replaced with an always succeeding contract."
-                    );
-
-                    (None, usage.default_term())
-                }
-            };
-
-            references.push(ConvertedRef {
-                doc,
-                term,
-                usage,
-                pointer: schema_ptr,
-            });
-
-            // Adding the new usages to the stack
-            let usage_diff = new_refs_usage.diff(&refs_usage);
-
-            ref_stack.extend(
-                usage_diff
-                    .predicates
-                    .into_iter()
-                    .map(|ptr| (ptr, RefUsageContext::Predicate)),
-            );
-
-            ref_stack.extend(
-                usage_diff
-                    .contracts
-                    .into_iter()
-                    .map(|ptr| (ptr, RefUsageContext::Contract)),
-            );
-
-            // Update refs_usage with the usages from this iteration
-            refs_usage.extend(new_refs_usage);
-        }
-
-        Environment { references }
-    }
-
-    /// Wrap a Nickel [`RichTerm`] in a let binding containing the definitions
-    /// from the environment. This is necessary for the Nickel access terms
-    /// tracked in the environment to actually work.
-    pub fn wrap(self, inner: RichTerm) -> RichTerm {
-        let fields = self
-            .references
-            .into_iter()
-            .map(ConvertedRef::into_binding)
-            .collect();
-
-        // All references are stored in the references environment, which is a flat record.
-        let global_env = Term::Record(RecordData {
-            fields,
-            ..Default::default()
-        });
-
-        Term::Let(
-            std::iter::once((ENVIRONMENT_ID.into(), global_env.into())).collect(),
+impl<'a> AcyclicReferences<'a> {
+    /// Wrap a map of references to protect from cyclic lookups.
+    pub fn new(inner: &'a BTreeMap<String, Schema>) -> Self {
+        AcyclicReferences {
             inner,
-            LetAttrs {
-                rec: true,
-                ..Default::default()
-            },
-        )
-        .into()
+            blackholed: RefCell::new(HashSet::new()),
+        }
     }
+
+    /// Look up a reference by name, but protected against cyclic lookups.
+    ///
+    /// The return value is a guard, and until the guard is dropped any future
+    /// lookups for the same name will return `None`.
+    pub fn get<'b>(&'b self, name: &'b str) -> Option<RefGuard<'b, 'a>> {
+        if self.blackholed.borrow().contains(name) {
+            None
+        } else {
+            self.inner.get_key_value(name).map(|(stored_name, s)| {
+                self.blackholed.borrow_mut().insert(stored_name);
+                RefGuard {
+                    refs: self,
+                    name,
+                    schema: s,
+                }
+            })
+        }
+    }
+
+    /// Iterate over all name/schema pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Schema)> {
+        self.inner
+            .iter()
+            .map(|(name, schema)| (name.as_str(), schema))
+    }
+
+    /// Iterate over all schemas.
+    pub fn schemas(&self) -> impl Iterator<Item = &Schema> {
+        self.inner.values()
+    }
+}
+
+/// A reference guard that protects from acyclic name lookups.
+pub struct RefGuard<'b, 'a: 'b> {
+    refs: &'b AcyclicReferences<'a>,
+    name: &'b str,
+    schema: &'b Schema,
+}
+
+impl<'b, 'a: 'b> Drop for RefGuard<'b, 'a> {
+    fn drop(&mut self) {
+        self.refs.blackholed.borrow_mut().remove(self.name);
+    }
+}
+
+impl<'b, 'a: 'b> std::ops::Deref for RefGuard<'b, 'a> {
+    type Target = Schema;
+
+    fn deref(&self) -> &Self::Target {
+        self.schema
+    }
+}
+
+fn resolve_references_one(value: &Value, schema: &Schema) -> BTreeMap<String, Schema> {
+    let mut refs = BTreeMap::new();
+    let mut record_ref = |schema: &Schema| {
+        if let Schema::Ref(s) = schema {
+            if !refs.contains_key(s) {
+                match parse_ptr(s) {
+                    None => {
+                        eprintln!("Warning: skipping unparseable pointer \"{s}\"");
+                    }
+                    Some(ptr) => match ptr.resolve_in(value) {
+                        Ok(val) => match Schema::try_from(val) {
+                            Ok(v) => {
+                                refs.insert(s.clone(), v);
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: skipping pointer \"{s}\" because we failed to convert the pointee: {e}");
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("Warning: skipping pointer \"{s}\" because it failed to resolve: {e}");
+                        }
+                    },
+                }
+            }
+        }
+    };
+
+    schema.traverse_ref(&mut record_ref);
+    refs
+}
+
+/// Resolves all references in `schema`, returning a map of reference name to
+/// the converted reference pointee.
+///
+/// The reference names in the map are the raw strings from the json, so they'll
+/// typically look something like "#/definitions/foo".
+///
+/// `value` is the json that was used to generate `schema`. It's needed here
+/// because references could point to things in `value` that aren't in `schema`.
+/// For example, everything in "#/definitions" won't be in `schema`. Technically,
+/// we could take only `value` as an argument and generate `schema` from it.
+///
+/// All references we find are resolved recursively, so that if the main schema
+/// contains a reference to "#/definitions/foo" and the "#/definitions/foo"
+/// schema contains a reference to "#/definitions/bar" then the returned map
+/// will contain both.
+pub fn resolve_all(value: &Value, schema: &Schema) -> BTreeMap<String, Schema> {
+    let mut refs = resolve_references_one(value, schema);
+    let mut seen_refs: HashSet<_> = refs.keys().cloned().collect();
+    let mut unfollowed_refs = seen_refs.clone();
+
+    while !unfollowed_refs.is_empty() {
+        let mut next_refs = HashSet::new();
+        for name in unfollowed_refs {
+            // unwrap: refs is always a superset of unfollowed_refs
+            let new_refs = resolve_references_one(value, &refs[&name]);
+
+            next_refs.extend(new_refs.keys().cloned());
+            refs.extend(new_refs);
+        }
+        unfollowed_refs = next_refs.difference(&seen_refs).cloned().collect();
+        seen_refs.extend(next_refs);
+    }
+
+    refs
 }

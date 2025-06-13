@@ -1,0 +1,26 @@
+---
+source: tests/transforms.rs
+expression: schema
+---
+Object(Properties(ObjectProperties(
+  properties: {
+    "my_object": Property(
+      doc: None,
+      schema: AllOf([
+        Number(Minimum(Rational(
+          s: true,
+          n: "0x3",
+          d: "0x1",
+        ))),
+        Number(Maximum(Rational(
+          s: true,
+          n: "0x5",
+          d: "0x1",
+        ))),
+      ]),
+      optional: true,
+    ),
+  },
+  pattern_properties: {},
+  additional_properties: None,
+)))

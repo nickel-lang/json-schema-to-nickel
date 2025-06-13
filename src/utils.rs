@@ -2,11 +2,10 @@ use std::collections::HashSet;
 
 use nickel_lang_core::{
     identifier::LocIdent,
-    term::{make, RichTerm},
+    mk_app,
+    term::{array::ArrayAttrs, make, Number, RichTerm, Term},
+    typ::{EnumRows, RecordRows, Type, TypeF},
 };
-use schemars::schema::{InstanceType, RootSchema, Schema, SchemaObject, SingleOrVec};
-
-use crate::references;
 
 pub fn static_access<I, S>(record: S, fields: I) -> RichTerm
 where
@@ -24,7 +23,7 @@ pub fn decode_json_ptr_part(part: &str) -> String {
     part.replace("~0", "~").replace("~1", "/")
 }
 
-/// Returns `true` if all the elements in the iterator are distinct.
+/// Returns `true` if all the items in `items` are distinct.
 pub fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool {
     let mut seen = HashSet::new();
     for item in items {
@@ -35,70 +34,28 @@ pub fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool
     true
 }
 
-/// If this schema specifies types, returns the specified types.
-///
-/// For example, given `{ "type": ["null", "number"], ... }` this
-/// returns `Some(["null", "number"])`.
-pub fn schema_types(s: &Schema, root_schema: &RootSchema) -> Option<SingleOrVec<InstanceType>> {
-    match s {
-        Schema::Bool(_) => None,
-        Schema::Object(SchemaObject {
-            instance_type: Some(instance_type),
-            reference: None,
-            ..
-        }) => Some(instance_type.clone()),
-        Schema::Object(SchemaObject {
-            instance_type: None,
-            reference: Some(reference),
-            ..
-        }) => {
-            let ptr = references::parse_ref(reference)?;
-            let s = ptr.resolve(root_schema)?;
-            schema_types(&s, root_schema)
-        }
-        _ => None,
+/// Creates a contract that for checking a Nickel type.
+pub fn type_contract(ty: TypeF<Box<Type>, RecordRows, EnumRows, RichTerm>) -> RichTerm {
+    Term::Type {
+        typ: ty.into(),
+        // We don't actually care about the contract -- it's a runtime thing.
+        contract: Term::Null.into(),
     }
+    .into()
 }
 
-/// Is this schema nothing but a `{ "type": ... }`? If so, return the list of types.
-pub fn plain_schema_types(
-    s: &Schema,
-    root_schema: &RootSchema,
-) -> Option<SingleOrVec<InstanceType>> {
-    match s {
-        Schema::Bool(_) => None,
-        Schema::Object(SchemaObject {
-            instance_type: Some(instance_type),
-            reference: None,
-            format: None,
-            enum_values: None,
-            const_value: None,
-            subschemas: None,
-            number: None,
-            string: None,
-            array: None,
-            object: None,
-            metadata: _,
-            extensions: _,
-        }) => Some(instance_type.clone()),
-        Schema::Object(SchemaObject {
-            instance_type: None,
-            reference: Some(reference),
-            format: None,
-            enum_values: None,
-            const_value: None,
-            subschemas: None,
-            number: None,
-            string: None,
-            array: None,
-            object: None,
-            metadata: _,
-            extensions: _,
-        }) => {
-            let ptr = references::parse_ref(reference)?;
-            let s = ptr.resolve(root_schema)?;
-            schema_types(&s, root_schema)
-        }
-        _ => None,
+pub fn num(x: &Number) -> RichTerm {
+    Term::Num(x.clone()).into()
+}
+
+/// Turns a collection of contracts into a single contract.
+pub fn sequence(mut contracts: Vec<RichTerm>) -> RichTerm {
+    if contracts.len() == 1 {
+        contracts.pop().unwrap()
+    } else {
+        mk_app!(
+            static_access("std", ["contract", "Sequence"]),
+            Term::Array(contracts.into_iter().collect(), ArrayAttrs::default())
+        )
     }
 }

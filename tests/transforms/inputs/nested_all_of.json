@@ -1,0 +1,19 @@
+{
+  "$comment": "nested allOf should get flattened",
+  "type": "object",
+  "properties": {
+    "my_object": {
+      "allOf": [
+        {
+          "type": "number"
+        },
+        {
+          "allOf": [
+            { "minimum": 3 },
+            { "maximum": 5 }
+          ]
+        }
+      ]
+    }
+  }
+}

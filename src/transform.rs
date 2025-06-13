@@ -1,24 +1,129 @@
-//! This module implements some transforms of the JSON schema that preserve semantics
-//! but make the schema easier to analyze.
+//! Schema transforms
 //!
-//! It turns out that `schemars`'s representation of schemas is pretty clunky for this
-//! purpose. Probably we want a better intermediate representation.
+//! When we first create our intermediate representation from a JSON Schema, it
+//! can be verbose and redundant. The transforms in this module preserve the
+//! semantics of the IR but simplify it.
 
-use std::collections::HashSet;
+// TODO;
+// - in the github example, why doesn't the {_ | Dyn} in services get removed?
+// - simplify types in if/then expressions without an else
 
-use schemars::schema::{
-    ArrayValidation, ObjectValidation, RootSchema, Schema, SchemaObject, SingleOrVec,
-    SubschemaValidation,
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+use nickel_lang_core::term::{make, record::RecordData, RichTerm, Term};
+
+use crate::{
+    contract::ContractContextData,
+    object::{Obj, ObjectProperties},
+    references::AcyclicReferences,
+    schema::Schema,
+    traverse::Traverse,
+    typ::InstanceTypeSet,
+    utils::{distinct, sequence},
 };
 
-use crate::{references, utils::plain_schema_types};
-
-/// Some JSON schemas factor out common parts of schemas into definitions.
-/// This causes some difficulty for our analysis because information is represented
-/// in multiple different places, so this transformation tries to merge factored-out
-/// parts into a single schema.
+/// Simplifies a schema by repeatedly applying transformations until we hit a
+/// fixed point.
 ///
-/// As a motivating example, the github-workflow schema factors out
+/// This could be slow: every iteration through the fixed-point-finding loop is
+/// linear in the schema size.
+pub fn simplify(mut schema: Schema, refs: &AcyclicReferences) -> Schema {
+    loop {
+        let prev = schema.clone();
+        schema = flatten_logical_ops(schema);
+        schema = one_to_any(schema, refs);
+        schema = intersect_types(schema, refs);
+        schema = merge_required_properties(schema);
+        schema = enumerate_regex_properties(schema, 8);
+
+        if schema == prev {
+            return schema;
+        }
+    }
+}
+
+/// Merges nested `AllOf`s and `AnyOf`s.
+///
+/// For example, `AllOf(a, b, AllOf(c, d))` becomes `AllOf(a, b, c, d)`.
+///
+/// This transform also simplifies empty and singleton `AllOf`s and `AnyOf`s.
+pub fn flatten_logical_ops(schema: Schema) -> Schema {
+    fn flatten_one(schema: Schema) -> Schema {
+        match schema {
+            Schema::AnyOf(vec) | Schema::OneOf(vec) if vec.is_empty() => Schema::Never,
+            Schema::AllOf(vec) if vec.is_empty() => Schema::Always,
+
+            Schema::AnyOf(mut vec) | Schema::AllOf(mut vec) | Schema::OneOf(mut vec)
+                if vec.len() == 1 =>
+            {
+                vec.pop().unwrap()
+            }
+
+            Schema::AllOf(vec) => {
+                // This is a perfect application of Vec::extract_if, if it were stable.
+                let mut new_vec = Vec::new();
+                for elt in vec {
+                    match elt {
+                        Schema::AllOf(e) => new_vec.extend(e),
+                        Schema::Always => {}
+                        Schema::Never => {
+                            return Schema::Never;
+                        }
+                        e => new_vec.push(e),
+                    }
+                }
+                Schema::AllOf(new_vec)
+            }
+
+            Schema::AnyOf(vec) => {
+                // This is a perfect application of Vec::extract_if, if it were stable.
+                let mut new_vec = Vec::new();
+                for elt in vec {
+                    match elt {
+                        Schema::AnyOf(e) => new_vec.extend(e),
+                        Schema::Always => {
+                            return Schema::Always;
+                        }
+                        Schema::Never => {}
+                        e => new_vec.push(e),
+                    }
+                }
+                Schema::AnyOf(new_vec)
+            }
+            s => s,
+        }
+    }
+
+    schema.traverse(&mut flatten_one)
+}
+
+/// Attempts to convert `OneOf` to `AnyOf`, by detecting whether
+/// the alternatives are mutually exclusive.
+pub fn one_to_any(schema: Schema, refs: &AcyclicReferences) -> Schema {
+    fn distinct_types(s: &[Schema], refs: &AcyclicReferences) -> bool {
+        let simple_types = s
+            .iter()
+            .map(|s| s.simple_type(refs))
+            .collect::<Option<Vec<_>>>();
+
+        matches!(simple_types, Some(tys) if distinct(tys.iter()))
+    }
+
+    let mut one_to_any_one = |schema: Schema| -> Schema {
+        match schema {
+            Schema::OneOf(vec) if distinct_types(&vec, refs) => Schema::AnyOf(vec),
+            s => s,
+        }
+    };
+
+    schema.traverse(&mut one_to_any_one)
+}
+
+/// Inlines some references to the schemas that reference them.
+///
+/// As a motivating example from the github-workflow schema, they
+/// factor out some type definitions in "eventObject": the definition
+/// looks like
 ///
 /// ```json
 ///    "eventObject": {
@@ -34,397 +139,398 @@ use crate::{references, utils::plain_schema_types};
 ///    },
 /// ```
 ///
-/// as a definition, and then references it in various places. For example,
-/// it defines a branch protection rule as
+/// and gets used like
 ///
 /// ```json
-/// {
-///   "$ref": "#/definitions/eventObject",
-///   "properties": {
-///     "types": ...
-///   }
-/// }
+///    "branch_protection_rule": {
+///      "$ref": "#/definitions/eventObject",
+///      "properties": {
+///        // ...
+///      }
+///    },
 /// ```
 ///
-/// instead of (which would be more convenient for our contract-generation
-/// analysis):
+/// In particular, the schema using the ref doesn't have its own "type"
+/// annotation, which is annoying for our analysis. Inlining the definition
+/// fixes this annoyance.
+pub fn inline_refs(schema: Schema, refs: &AcyclicReferences) -> Schema {
+    let mut inline_one = |schema: Schema| -> Schema {
+        match schema {
+            Schema::Ref(s) => match refs.get(&s).as_deref() {
+                // The ref-inlining heuristic could use some work. We probably
+                // want to avoid inlining large schemas, and we probably want to
+                // prioritize inlining things that can lead to further simplication.
+                Some(resolved @ Schema::AnyOf(tys))
+                    if tys.iter().all(|ty| ty.just_type().is_some()) =>
+                {
+                    resolved.clone()
+                }
+                Some(_) => Schema::Ref(s.clone()),
+                None => Schema::Always,
+            },
+            s => s,
+        }
+    };
+
+    schema.traverse(&mut inline_one)
+}
+
+/// Attempts to merge "required" and "properties" schemas.
 ///
-/// ```json
-/// {
-///   "type": ["object", "null"],
-///   "properties": {
-///     "types": ...
-///   },
-///   "additionalProperties": true
-/// }
+/// In JSON Schema, "required" and "properties" are two orthogonal checks,
+/// but in Nickel we like to have optionality annotations on the properties.
+/// When this transform encounters
+///
+/// ```text
+/// AllOf([
+///   Required(["foo"]),
+///   Properties({
+///     foo -> ...
+///     bar -> ...
+///   })
+/// ])
 /// ```
 ///
-/// This transformation inlines the "$ref", but it doesn't do the translation
-/// from "oneOf" to "type". For that, see [`lift_any_of_types`].
-pub fn inline_defs(root_schema: RootSchema) -> RootSchema {
-    let mut schema = root_schema.schema.clone();
-    schema.post_visit(&mut MergeDefs { root: &root_schema });
-    RootSchema {
-        definitions: root_schema.definitions,
-        meta_schema: root_schema.meta_schema,
-        schema,
-    }
-}
+/// it removes the "Required" and marks the "foo" in "Properties"
+/// as being non-optional.
+pub fn merge_required_properties(schema: Schema) -> Schema {
+    let mut merge_one = |schema: Schema| -> Schema {
+        match schema {
+            Schema::AllOf(vec) => {
+                let mut required = BTreeSet::new();
+                let mut props = Vec::new();
+                let mut new_vec = Vec::new();
 
-/// The definition-merging of `merge_defs` is fine, but let's suppose we have
-///
-/// ```json
-/// "branch_protection_rule": {
-///   "$ref": "#/definitions/eventObject",
-///   "properties": { ... }
-/// }
-/// ```
-///
-/// which then gets merged with the defs to become
-///
-/// ```json
-/// "branch_protection_rule": {
-///   "oneOf": [
-///     {
-///       "type": "object"
-///     },
-///     {
-///       "type": "null"
-///     }
-///   ],
-///   "additionalProperties": true
-///   "properties": { ... }
-/// }
-/// ```
-///
-/// This still isn't great, because instead of "oneOf" with types inside, we'd prefer
-/// just to have "type" at the top-level. That's what this transformation does.
-pub fn lift_any_of_types(root_schema: RootSchema) -> RootSchema {
-    let mut schema = root_schema.schema.clone();
-    schema.post_visit(&mut LiftAnyOfTypes { root: &root_schema });
-    RootSchema {
-        definitions: root_schema.definitions,
-        meta_schema: root_schema.meta_schema,
-        schema,
-    }
-}
+                for s in vec {
+                    match s {
+                        Schema::Object(Obj::Required(strings)) => {
+                            required.extend(strings.into_iter())
+                        }
+                        Schema::Object(Obj::Properties(p)) => props.push(p),
+                        s => new_vec.push(s),
+                    }
+                }
 
-/// A shallow merge operation for schemas.
-///
-/// JSON schemas have a lot of implicit "and" operations; to a first approximation,
-/// all of the validations in a schema are applied independently, and the schema as
-/// a whole passes if and only they all pass individually. For example,
-/// `{ "minProperties": 1, "type": ["object"] }`
-/// is equivalent to
-/// `{ "allOf": [ { "minProperties": 1 }, { "type": ["object"] } ] }`
-///
-/// This trait produces things more like the first representation, by merging
-/// schemas together to produce schemas with more fields.
-///
-/// Exceptions to the "first approximation" include things like "properties"
-/// and "additionalProperties", which cannot be validated independently.
-trait ShallowMerge: Sized {
-    fn shallow_merge(self, other: &Self) -> Option<Self>;
-}
+                let mut unused_required = required.clone();
 
-impl ShallowMerge for ObjectValidation {
-    fn shallow_merge(mut self, other: &Self) -> Option<Self> {
-        // Does `ov` have any of the three fields that work together?
-        fn has_interactions(ov: &ObjectValidation) -> bool {
-            !ov.properties.is_empty()
-                || ov.additional_properties.is_some()
-                || !ov.pattern_properties.is_empty()
-        }
-
-        if no_clash(&self.max_properties, &other.max_properties)
-            && no_clash(&self.min_properties, &other.min_properties)
-            && no_clash(&self.property_names, &other.property_names)
-            && !(has_interactions(&self) && has_interactions(other))
-        {
-            merge_opt(&mut self.max_properties, &other.max_properties);
-            merge_opt(&mut self.min_properties, &other.min_properties);
-            merge_opt(&mut self.property_names, &other.property_names);
-            merge_opt(
-                &mut self.additional_properties,
-                &other.additional_properties,
-            );
-            self.pattern_properties
-                .extend(other.pattern_properties.clone());
-            self.properties.extend(other.properties.clone());
-            Some(self)
-        } else {
-            None
-        }
-    }
-}
-
-impl ShallowMerge for ArrayValidation {
-    fn shallow_merge(mut self, other: &Self) -> Option<Self> {
-        // Does `av` have either of the two fields that work together?
-        fn has_interactions(av: &ArrayValidation) -> bool {
-            av.items.is_some() || av.additional_items.is_some()
-        }
-
-        if !(has_interactions(&self) && has_interactions(other))
-            && no_clash(&self.max_items, &other.max_items)
-            && no_clash(&self.min_items, &other.min_items)
-            && no_clash(&self.unique_items, &other.unique_items)
-            && no_clash(&self.contains, &other.contains)
-        {
-            merge_opt(&mut self.items, &other.items);
-            merge_opt(&mut self.additional_items, &other.additional_items);
-            merge_opt(&mut self.max_items, &other.max_items);
-            merge_opt(&mut self.min_items, &other.min_items);
-            merge_opt(&mut self.unique_items, &other.unique_items);
-            merge_opt(&mut self.contains, &other.contains);
-            Some(self)
-        } else {
-            None
-        }
-    }
-}
-
-impl<T: ShallowMerge + Clone> ShallowMerge for Box<T> {
-    fn shallow_merge(self, other: &Self) -> Option<Self> {
-        (*self).shallow_merge(other).map(Box::new)
-    }
-}
-
-impl<T: ShallowMerge + Clone> ShallowMerge for Option<T> {
-    fn shallow_merge(self, other: &Self) -> Option<Self> {
-        match (self, other) {
-            (x, None) => Some(x),
-            (None, x) => Some(x.clone()),
-            (Some(x), Some(y)) => x.shallow_merge(y).map(Some),
-        }
-    }
-}
-
-fn no_clash<T: PartialEq>(x: &Option<T>, y: &Option<T>) -> bool {
-    x.is_none() || y.is_none() || x == y
-}
-
-fn merge_opt<T: Clone>(x: &mut Option<T>, y: &Option<T>) {
-    if x.is_none() {
-        *x = y.clone();
-    }
-}
-
-/// The visitor for implementing [`merge_defs`].
-struct MergeDefs<'a> {
-    root: &'a RootSchema,
-}
-
-impl VisitorMut for MergeDefs<'_> {
-    fn visit_object(&mut self, obj: &mut SchemaObject) {
-        if let Some(reference) = &obj.reference {
-            if let Some(referent) =
-                references::parse_ref(reference).and_then(|ptr| ptr.resolve(self.root))
-            {
-                match &*referent {
-                    Schema::Bool(_) => {}
-                    Schema::Object(other) => {
-                        let can_merge = no_clash(&obj.instance_type, &other.instance_type)
-                            && no_clash(&obj.format, &other.format)
-                            && no_clash(&obj.subschemas, &other.subschemas)
-                            && no_clash(&obj.number, &other.number)
-                            && no_clash(&obj.string, &other.string);
-
-                        let merged_obj = obj.object.clone().shallow_merge(&other.object);
-                        let merged_arr = obj.array.clone().shallow_merge(&other.array);
-
-                        if let (Some(merged_obj), Some(merged_arr), true) =
-                            (merged_obj, merged_arr, can_merge)
-                        {
-                            merge_opt(&mut obj.instance_type, &other.instance_type);
-                            merge_opt(&mut obj.format, &other.format);
-                            merge_opt(&mut obj.subschemas, &other.subschemas);
-                            merge_opt(&mut obj.number, &other.number);
-                            merge_opt(&mut obj.string, &other.string);
-                            obj.object = merged_obj;
-                            obj.array = merged_arr;
-
-                            // We've already resolved our reference, so just take the other one unconditionally.
-                            obj.reference = other.reference.clone();
-
-                            // At this point, we could try to follow the other
-                            // reference too. That might introduce loops though,
-                            // so let's not.
+                for mut p in props {
+                    for (name, prop) in p.properties.iter_mut() {
+                        if required.contains(name) {
+                            unused_required.remove(name);
+                            prop.optional = false;
                         }
                     }
+                    new_vec.push(Schema::Object(Obj::Properties(p)));
                 }
-            } else {
-                obj.reference.take();
+
+                if !unused_required.is_empty() {
+                    new_vec.push(Schema::Object(Obj::Required(unused_required)))
+                }
+                Schema::AllOf(new_vec)
             }
-        };
-    }
-}
-
-/// A "visitor" trait for schemas.
-///
-/// An implementation of this is really just a fancy callback, as our schema
-/// representation doesn't really have variants.
-trait VisitorMut {
-    fn visit_object(&mut self, _obj: &mut SchemaObject) {}
-}
-
-/// A trait for performing post-order traversal of the schema tree.
-trait PostVisit {
-    /// Visit the schema tree, invoking the visitor on all children of a node
-    /// and then invoking it on the node itself.
-    fn post_visit<V: VisitorMut>(&mut self, visitor: &mut V);
-}
-
-impl PostVisit for Schema {
-    fn post_visit<V: VisitorMut>(&mut self, visitor: &mut V) {
-        if let Schema::Object(obj) = self {
-            obj.post_visit(visitor);
+            s => s,
         }
-    }
+    };
+
+    schema.traverse(&mut merge_one)
 }
 
-impl PostVisit for SchemaObject {
-    fn post_visit<V: VisitorMut>(&mut self, visitor: &mut V) {
-        if let Some(subschemas) = &mut self.subschemas {
-            subschemas.post_visit(visitor);
-        }
-        if let Some(array) = &mut self.array {
-            array.post_visit(visitor);
-        }
-        if let Some(object) = &mut self.object {
-            object.post_visit(visitor);
-        }
+/// When encountering an `AllOf` in which different elements have different
+/// sets of allowed types, propagates the intersection of the type sets to all
+/// elements.
+pub fn intersect_types(schema: Schema, refs: &AcyclicReferences) -> Schema {
+    let mut intersect_one = |schema: Schema| -> Schema {
+        match schema {
+            Schema::AllOf(mut vec) => {
+                // The set of allowed types is the intersection, over all elements of `vec`,
+                // of that schema's set of allowed types.
+                let mut allowed_types = InstanceTypeSet::FULL;
 
-        visitor.visit_object(self);
-    }
-}
+                for s in &vec {
+                    allowed_types = allowed_types.intersect(s.allowed_types(refs));
+                }
 
-impl PostVisit for SubschemaValidation {
-    fn post_visit<V: VisitorMut>(&mut self, visitor: &mut V) {
-        let children = [&mut self.all_of, &mut self.any_of, &mut self.one_of]
-            .into_iter()
-            .filter_map(|x| x.as_mut())
-            .flat_map(|schemas| schemas.iter_mut())
-            .chain(self.not.as_deref_mut())
-            .chain(self.if_schema.as_deref_mut())
-            .chain(self.then_schema.as_deref_mut())
-            .chain(self.else_schema.as_deref_mut());
-
-        for child in children {
-            child.post_visit(visitor);
-        }
-    }
-}
-impl PostVisit for ArrayValidation {
-    fn post_visit<V: VisitorMut>(&mut self, visitor: &mut V) {
-        // SingleOrVec doesn't give a way to get a mutable iterator, so this was
-        // the easiest way I found to iterate over it.
-        if let Some(items) = &mut self.items {
-            match items {
-                schemars::schema::SingleOrVec::Single(x) => x.post_visit(visitor),
-                schemars::schema::SingleOrVec::Vec(vec) => {
-                    for x in vec {
-                        x.post_visit(visitor)
+                vec.retain_mut(|s| {
+                    if s.just_type_set().is_some() {
+                        // We filter out all the elements that are just type restrictions, since
+                        // there could be repeats. Then we'll add back in one if necessary.
+                        false
+                    } else if let Schema::AnyOf(schemas) = s {
+                        schemas.retain(|s| {
+                            s.simple_type(refs)
+                                .is_none_or(|ty| allowed_types.contains(ty))
+                        });
+                        true
+                    } else {
+                        s.simple_type(refs)
+                            .is_none_or(|ty| allowed_types.contains(ty))
                     }
+                });
+
+                if !vec
+                    .iter()
+                    .any(|s| s.allowed_types_shallow(refs) == allowed_types)
+                {
+                    vec.push(allowed_types.to_schema());
+                }
+
+                Schema::AllOf(vec)
+            }
+            s => s,
+        }
+    };
+
+    schema.traverse(&mut intersect_one)
+}
+
+/// If the regex in `s` only matches a small number of strings, list them all out.
+fn enumerate_regex(s: &str, max_expansion: usize) -> Option<Vec<String>> {
+    use regex_syntax::hir::{Hir, HirKind, Look};
+    // TODO: maybe we should signal an error (probably while constructing the schema) if
+    // there's a regex we can't parse?
+    let hir = regex_syntax::parse(s).ok()?.into_kind();
+
+    // We're only interested in anchored regexes (starting with ^, ending with $), so
+    // check that that's the case. Then strip the anchors in preparation for recursion.
+    let HirKind::Concat(mut elems) = hir else {
+        return None;
+    };
+    let Some(HirKind::Look(Look::Start)) = elems.first().map(|h| h.kind()) else {
+        return None;
+    };
+
+    let Some(HirKind::Look(Look::End)) = elems.last().map(|h| h.kind()) else {
+        return None;
+    };
+    elems.remove(0);
+    elems.pop();
+    let hir = Hir::concat(elems);
+
+    fn enumerate_rec(hir: regex_syntax::hir::Hir, max_expansion: usize) -> Option<Vec<String>> {
+        match hir.into_kind() {
+            HirKind::Empty => Some(vec![String::new()]),
+            HirKind::Literal(literal) => Some(vec![String::from_utf8(literal.0.to_vec()).ok()?]),
+            HirKind::Class(_) | HirKind::Look(_) => None,
+            HirKind::Repetition(repetition) => {
+                let max = repetition.max? as usize;
+                let min = repetition.min as usize;
+                let inner = enumerate_rec(*repetition.sub, max_expansion)?;
+                if inner.len().checked_mul(max - min)? <= max_expansion {
+                    let mut ret = Vec::new();
+                    for i in min..=max {
+                        for s in &inner {
+                            ret.push(s.repeat(i));
+                        }
+                    }
+                    Some(ret)
+                } else {
+                    None
                 }
             }
-        }
-        let children = self.additional_items.iter_mut().chain(&mut self.contains);
-        for child in children {
-            child.post_visit(visitor);
-        }
-    }
-}
+            HirKind::Capture(capture) => enumerate_rec(*capture.sub, max_expansion),
+            HirKind::Concat(vec) => {
+                let mut options = vec![String::new()];
+                for sub in vec {
+                    let sub_options = enumerate_rec(sub, max_expansion)?;
+                    if sub_options.len() * options.len() > max_expansion {
+                        return None;
+                    }
 
-impl PostVisit for ObjectValidation {
-    fn post_visit<V: VisitorMut>(&mut self, visitor: &mut V) {
-        let children = self
-            .properties
-            .values_mut()
-            .chain(self.pattern_properties.values_mut())
-            .chain(self.additional_properties.as_deref_mut())
-            .chain(self.property_names.as_deref_mut());
-
-        for child in children {
-            child.post_visit(visitor);
-        }
-    }
-}
-
-/// The visitor for implementing [`lift_any_of_types`].
-struct LiftAnyOfTypes<'a> {
-    root: &'a RootSchema,
-}
-
-impl VisitorMut for LiftAnyOfTypes<'_> {
-    fn visit_object(&mut self, obj: &mut SchemaObject) {
-        if obj.instance_type.is_some() {
-            return;
-        }
-
-        if let Some(subschemas) = &mut obj.subschemas {
-            match (&subschemas.any_of, &subschemas.one_of) {
-                (None, Some(any_of)) | (Some(any_of), None) => {
-                    let Some(plain_types) = any_of
+                    options = options
                         .iter()
-                        .map(|s| plain_schema_types(s, self.root))
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        return;
-                    };
-
-                    let Some(plain_types) = plain_types
-                        .into_iter()
-                        .map(|tys| match tys {
-                            SingleOrVec::Single(t) => Some(*t),
-                            SingleOrVec::Vec(_) => None,
+                        .flat_map(|prev| {
+                            sub_options.iter().map(|next| {
+                                let mut new = prev.to_owned();
+                                new.push_str(next);
+                                new
+                            })
                         })
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        return;
-                    };
-
-                    // If there's a repeated type in a `oneOf` array then that type
-                    // is technically disallowed. (Although most likely it's a mistake.)
-                    let mut unique_types = HashSet::new();
-                    let is_one_of = subschemas.one_of.is_some();
-                    for t in plain_types {
-                        if unique_types.insert(t) && is_one_of {
-                            eprintln!("ignoring duplicated type {t:?} in oneOf");
-                            unique_types.remove(&t);
-                        }
-                    }
-
-                    let plain_types: Vec<_> = unique_types.into_iter().collect();
-
-                    subschemas.any_of = None;
-                    subschemas.one_of = None;
-
-                    obj.instance_type = match plain_types.as_slice() {
-                        [] => None,
-                        [x] => Some(SingleOrVec::Single(Box::new(*x))),
-                        _ => Some(SingleOrVec::Vec(plain_types)),
-                    };
+                        .collect();
                 }
-                _ => {}
+
+                Some(options)
             }
-
-            // We may have made the subschema validation trivial, in which case remove it.
-            // (This could be a separate pass.)
-            if matches!(
-                **subschemas,
-                SubschemaValidation {
-                    all_of: None,
-                    any_of: None,
-                    one_of: None,
-                    not: None,
-                    if_schema: None,
-                    then_schema: None,
-                    else_schema: None
+            HirKind::Alternation(vec) => {
+                let mut options = Vec::new();
+                for sub in vec {
+                    options.extend(enumerate_rec(sub, max_expansion - options.len())?);
+                    if options.len() > max_expansion {
+                        return None;
+                    }
                 }
-            ) {
-                obj.subschemas = None;
+                Some(options)
             }
         }
+    }
+
+    let mut ret = enumerate_rec(hir, max_expansion)?;
+    ret.sort();
+    Some(ret)
+}
+
+/// If a "patternProperties" has a regex that only matches a small set of strings, turns
+/// it into a "properties" schema that enumerates the strings.
+///
+/// Some real-world schemas use "patternProperties" just to save some repetition; for example,
+/// `github-workflow.json` has
+///
+/// ```json
+///   "patternProperties": {
+///     "^(branche|tag|path)s(-ignore)?$": {
+///       "type": "array"
+///     }
+///   },
+/// ```
+///
+/// We'd prefer to list out all the properties here, because then we can make a proper record
+/// contract.
+pub fn enumerate_regex_properties(schema: Schema, max_expansion: usize) -> Schema {
+    fn try_expand_props(
+        props: &ObjectProperties,
+        max_expansion: usize,
+    ) -> Option<ObjectProperties> {
+        let mut new_props = ObjectProperties {
+            properties: props.properties.clone(),
+            pattern_properties: BTreeMap::new(),
+            additional_properties: props.additional_properties.clone(),
+        };
+
+        for (s, schema) in &props.pattern_properties {
+            let expanded = enumerate_regex(s, max_expansion)?;
+            for name in expanded {
+                if new_props
+                    .properties
+                    .insert(name, schema.clone().into())
+                    .is_some()
+                {
+                    // Abort if there's any overlap between properties (either between
+                    // existing properties and regex properties, or between multiple
+                    // regex properties). In principle, I think it's also ok to combine
+                    // overlaps using allOf.
+                    return None;
+                }
+            }
+        }
+
+        Some(new_props)
+    }
+
+    let mut enumerate_one = |schema: Schema| -> Schema {
+        match schema {
+            Schema::Object(Obj::Properties(props)) => Schema::Object(Obj::Properties(
+                try_expand_props(&props, max_expansion).unwrap_or(props),
+            )),
+            s => s,
+        }
+    };
+
+    schema.traverse(&mut enumerate_one)
+}
+
+/// Collect (recursively) all the names of properties in this schema.
+///
+/// The Nickel contracts might create record contracts with these names; if
+/// we find a name that isn't in this collection, it's guaranteed not to be
+/// shadowed by any name in a generated contract.
+fn all_names(s: &Schema) -> HashSet<String> {
+    let mut ret = HashSet::new();
+    let mut shadowed = |s: &Schema| {
+        if let Schema::Object(Obj::Properties(props)) = s {
+            ret.extend(props.properties.keys().cloned());
+        }
+    };
+
+    s.traverse_ref(&mut shadowed);
+    ret
+}
+
+/// Create a variant of `prefix` that doesn't collide with any other names.
+fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
+    let mut ret = prefix.to_owned();
+    while taken_names.contains(&ret) {
+        ret.push('_');
+    }
+    ret
+}
+
+/// Convert a schema to a nickel contract.
+///
+/// `lib_import` is a term that imports the json-schema library.
+pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTerm) -> RichTerm {
+    let mut shadowed_names = all_names(s);
+    shadowed_names.extend(refs.schemas().flat_map(all_names));
+
+    let refs_name = no_collisions_name(&shadowed_names, "refs");
+    let lib_name = no_collisions_name(&shadowed_names, "js2n");
+    let std_name = no_collisions_name(&shadowed_names, "std");
+
+    let ctx_data = ContractContextData::new(refs, &lib_name, &std_name, &refs_name);
+    let ctx = ctx_data.ctx();
+    let main_contract = s.to_contract(ctx);
+
+    // Make contracts from the references also, and continue doing so until there are
+    // no unconverted references.
+    let mut accessed = ctx.take_accessed_refs();
+    // TODO: see if IndexMap would be faster
+    let mut refs_env = BTreeMap::new();
+    let mut unfollowed_refs = accessed.clone();
+    while !unfollowed_refs.is_empty() {
+        for (name, eager) in unfollowed_refs {
+            // FIXME: once we convert to the new ast, make this an actual nested access
+            // For now, it's a single access with a name like "foo.bar".
+            let names: Vec<_> = ctx.ref_name(&name, eager).collect();
+            // unwrap: the context shouldn't collect missing references
+            refs_env.insert(
+                names.join("."),
+                sequence(refs.get(&name).unwrap().to_contract(ctx)),
+            );
+        }
+
+        let newly_accessed = ctx.take_accessed_refs();
+        unfollowed_refs = newly_accessed.difference(&accessed).cloned().collect();
+        accessed.extend(newly_accessed);
+    }
+
+    let refs_dict = Term::Record(RecordData {
+        fields: refs_env
+            .into_iter()
+            .map(|(name, value)| (name.into(), value.into()))
+            .collect(),
+        ..Default::default()
+    });
+
+    let mut bindings = vec![(ctx.lib_name(), lib_import)];
+    if ctx.std_name() != "std" {
+        bindings.push((ctx.std_name(), Term::Var("std".into()).into()));
+    };
+    make::let_in(
+        false,
+        bindings,
+        make::let_one_rec_in(ctx.refs_name(), refs_dict, sequence(main_contract)),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regex_expansion() {
+        assert_eq!(
+            enumerate_regex("^(foo|bar)$", 2),
+            Some(vec!["bar".to_owned(), "foo".to_owned()])
+        );
+
+        assert_eq!(enumerate_regex("^(foo|bar)$", 1), None);
+
+        assert_eq!(
+            enumerate_regex("^(foo|bar)s?$", 4),
+            Some(vec![
+                "bar".to_owned(),
+                "bars".to_owned(),
+                "foo".to_owned(),
+                "foos".to_owned()
+            ])
+        );
     }
 }

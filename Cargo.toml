@@ -12,10 +12,12 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 clap = { version = "^4.3", features = ["derive"] }
 fluent-uri = "0.1.4"
+miette = "7.5.0"
 nickel-lang-core = { version = "0.10", default-features = false }
 
 pretty = "^0.11"
-schemars = "^0.8"
+regex-syntax = "0.8.5"
+serde = { version = "1.0.218", features = ["derive"] }
 serde_json = "^1.0"
 terminal_size = "^0.2"
 
@@ -24,9 +26,21 @@ terminal_size = "^0.2"
 nickel-lang-core = { version = "0.10", default-features = false }
 
 [dev-dependencies]
+glob = "0.3.2"
+insta = { version = "1.42.2", features = ["serde", "ron"] }
 json_schema_test_suite = "^0.3"
 lazy_static = "^1.4"
+libtest-mimic = "0.8.1"
 mockito = { version = "0.32.5", default-features = false }
-schemars = "^0.8"
 serde_json = "^1.0"
 stringreader = "^0.1"
+
+[[test]]
+name = "transforms"
+path = "tests/transforms.rs"
+harness = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+harness = false

@@ -2,11 +2,8 @@
   description = "json-schema-to-nickel";
 
   inputs = {
-    nixpkgs.url = "nixpkgs/nixpkgs-unstable";
-    crane = {
-      url = "github:ipetkov/crane";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+    crane.url = "github:ipetkov/crane";
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -101,6 +98,7 @@
         devShells.${system}.default = pkgs.mkShell {
           inputsFrom = lib.attrValues inputs.self.checks.${system};
           packages = [
+            pkgs.cargo-insta
             rust.rust-analyzer
             inputs.topiary.packages.${system}.default
             inputs.nickel.packages.${system}.default
