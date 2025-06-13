@@ -2,11 +2,7 @@
 source: tests/integration.rs
 expression: out
 ---
-let js2n_
-  = FAKE_JS2N_LIB,
-  std_
-  = std
-  in
+let js2n_ = FAKE_JS2N_LIB, std_ = std in
 let rec refs__
     = {
       "definitions.foo" =

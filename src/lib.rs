@@ -21,7 +21,8 @@ pub mod typ;
 pub(crate) mod utils;
 
 use nickel_lang_core::{
-    cache::{Cache, ErrorTolerance, SourcePath},
+    bytecode::ast::{compat::ToMainline, AstAlloc},
+    cache::{CacheHub, SourcePath},
     parser::{grammar::TermParser, lexer::Lexer, ErrorTolerantParser},
     term::RichTerm,
 };
@@ -32,14 +33,17 @@ pub fn inline_lib() -> RichTerm {
     let lib_ncl = include_bytes!(concat!(env!("OUT_DIR"), "/main.ncl"));
     let lib_ncl = String::from_utf8_lossy(lib_ncl);
 
-    let mut cache = Cache::new(ErrorTolerance::Strict);
+    let mut cache = CacheHub::new();
     let parser = TermParser::new();
-    let file_id = cache.add_string(
+    let file_id = cache.sources.add_string(
         SourcePath::Generated("main.ncl".to_owned()),
         lib_ncl.to_string(),
     );
-    let lexer = Lexer::new(cache.source(file_id));
-    parser.parse_strict(file_id, lexer).unwrap()
+    let lexer = Lexer::new(cache.sources.source(file_id));
+    parser
+        .parse_strict(&AstAlloc::new(), file_id, lexer)
+        .unwrap()
+        .to_mainline()
 }
 
 /// Create a Nickel contract from a JSON value containing a JSON Schema.

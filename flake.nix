@@ -99,6 +99,7 @@
           inputsFrom = lib.attrValues inputs.self.checks.${system};
           packages = [
             pkgs.cargo-insta
+            pkgs.cargo-nextest
             rust.rust-analyzer
             inputs.topiary.packages.${system}.default
             inputs.nickel.packages.${system}.default

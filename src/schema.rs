@@ -463,7 +463,7 @@ impl Str {
             Str::MinLength(n) => {
                 mk_app!(ctx.js2n("string.MinLength"), num(n))
             }
-            Str::Pattern(s) => mk_app!(ctx.js2n("string.Matches"), Term::Str(s.to_owned().into())),
+            Str::Pattern(s) => mk_app!(ctx.std("string.Matches"), Term::Str(s.to_owned().into())),
         }
     }
 }
