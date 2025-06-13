@@ -312,7 +312,7 @@ impl ObjectProperties {
             let (pattern, schema) = self.pattern_properties.iter().next().unwrap();
             let dict = dict_contract(schema, ctx);
             let names = mk_app!(
-                ctx.js2n("record.FieldsMatch"),
+                ctx.std("record.FieldsMatch"),
                 Term::Str(pattern.to_owned().into())
             );
             Some(vec![dict, names])

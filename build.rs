@@ -8,10 +8,12 @@ use std::{
 
 use nickel_lang_core::{
     cache::InputFormat,
+    error::{report::report_as_str, NullReporter},
     eval::cache::CacheImpl,
     match_sharedterm,
     program::Program,
-    term::{RichTerm, Term, Traverse, TraverseOrder},
+    term::{Import, RichTerm, Term},
+    traverse::{Traverse, TraverseOrder},
 };
 
 // Currently nickel does not have a package management system. Until there's
@@ -37,16 +39,19 @@ use nickel_lang_core::{
 /// resolution, splicing the files imported inline into the AST
 fn inline_imports(path: impl Into<OsString>) -> Result<RichTerm, Box<dyn Error>> {
     let path = &path.into();
-    let mut program: Program<CacheImpl> = Program::new_from_file(path.clone(), std::io::stderr())?;
-    let rt = program.parse().map_err(|e| program.report_as_str(e))?;
+    let mut program: Program<CacheImpl> =
+        Program::new_from_file(path.clone(), std::io::stderr(), NullReporter {})?;
+    let rt = program
+        .parse()
+        .map_err(|e| report_as_str(&mut program.files(), e, Default::default()))?;
 
     rt.traverse::<_, Box<dyn Error>>(
         &mut |subterm: RichTerm| {
             match_sharedterm!(match (subterm.term) {
-                Term::Import {
+                Term::Import(Import::Path {
                     path: import_path_rel,
                     format: InputFormat::Nickel,
-                } => {
+                }) => {
                     let mut import_path_abs: PathBuf = path.into();
                     import_path_abs.set_file_name(import_path_rel);
                     inline_imports(import_path_abs)

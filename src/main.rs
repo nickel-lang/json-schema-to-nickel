@@ -7,7 +7,7 @@ use std::{
 
 use clap::Parser;
 use json_schema_to_nickel::{convert, inline_lib};
-use nickel_lang_core::pretty::*;
+use nickel_lang_core::{pretty::*, term::Import};
 use terminal_size::{terminal_size, Width};
 
 #[derive(Parser)]
@@ -37,10 +37,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         Box::new(std::io::stdin())
     };
     let lib_term = if let Some(path) = args.library_path {
-        nickel_lang_core::term::Term::Import {
+        nickel_lang_core::term::Term::Import(Import::Path {
             path,
             format: nickel_lang_core::cache::InputFormat::Nickel,
-        }
+        })
         .into()
     } else {
         inline_lib()
