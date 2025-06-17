@@ -10,7 +10,14 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use nickel_lang_core::term::{make, record::RecordData, RichTerm, Term};
+use nickel_lang_core::{
+    bytecode::ast::{
+        pattern::Pattern,
+        record::{FieldDef, FieldPathElem},
+        Ast, AstAlloc, LetBinding, Node,
+    },
+    position::TermPos,
+};
 
 use crate::{
     contract::ContractContextData,
@@ -456,7 +463,12 @@ fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
 /// Convert a schema to a nickel contract.
 ///
 /// `lib_import` is a term that imports the json-schema library.
-pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTerm) -> RichTerm {
+pub fn schema_to_nickel<'ast>(
+    s: &Schema,
+    refs: &AcyclicReferences<'_>,
+    lib_import: Ast<'ast>,
+    alloc: &'ast AstAlloc,
+) -> Ast<'ast> {
     let mut shadowed_names = all_names(s);
     shadowed_names.extend(refs.schemas().flat_map(all_names));
 
@@ -464,7 +476,7 @@ pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTe
     let lib_name = no_collisions_name(&shadowed_names, "js2n");
     let std_name = no_collisions_name(&shadowed_names, "std");
 
-    let ctx_data = ContractContextData::new(refs, &lib_name, &std_name, &refs_name);
+    let ctx_data = ContractContextData::new(refs, &lib_name, &std_name, &refs_name, alloc);
     let ctx = ctx_data.ctx();
     let main_contract = s.to_contract(ctx);
 
@@ -476,13 +488,11 @@ pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTe
     let mut unfollowed_refs = accessed.clone();
     while !unfollowed_refs.is_empty() {
         for (name, eager) in unfollowed_refs {
-            // FIXME: once we convert to the new ast, make this an actual nested access
-            // For now, it's a single access with a name like "foo.bar".
-            let names: Vec<_> = ctx.ref_name(&name, eager).collect();
+            let path: Vec<_> = ctx.ref_name(&name, eager).map(|s| s.to_owned()).collect();
             // unwrap: the context shouldn't collect missing references
             refs_env.insert(
-                names.join("."),
-                sequence(refs.get(&name).unwrap().to_contract(ctx)),
+                path,
+                sequence(alloc, refs.get(&name).unwrap().to_contract(ctx)),
             );
         }
 
@@ -491,23 +501,40 @@ pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTe
         accessed.extend(newly_accessed);
     }
 
-    let refs_dict = Term::Record(RecordData {
-        fields: refs_env
-            .into_iter()
-            .map(|(name, value)| (name.into(), value.into()))
-            .collect(),
-        ..Default::default()
-    });
-
-    let mut bindings = vec![(ctx.lib_name(), lib_import)];
-    if ctx.std_name() != "std" {
-        bindings.push((ctx.std_name(), Term::Var("std".into()).into()));
-    };
-    make::let_in(
+    let refs_dict = Node::Record(alloc.record_data(
+        [],
+        refs_env.into_iter().map(|(path, value)| FieldDef {
+            path: alloc.alloc_many(path.into_iter().map(|s| FieldPathElem::Ident(s.into()))),
+            metadata: Default::default(),
+            value: Some(value),
+            pos: TermPos::None,
+        }),
         false,
-        bindings,
-        make::let_one_rec_in(ctx.refs_name(), refs_dict, sequence(main_contract)),
-    )
+    ));
+
+    let binding = |name: &str, value| LetBinding {
+        pattern: Pattern::any(name.into()),
+        metadata: Default::default(),
+        value,
+    };
+
+    let mut bindings = vec![binding(ctx.lib_name(), lib_import)];
+    if ctx.std_name() != "std" {
+        bindings.push(binding(ctx.std_name(), Node::Var("std".into()).into()));
+    }
+    alloc
+        .let_block(
+            bindings,
+            alloc
+                .let_block(
+                    [binding(ctx.refs_name(), refs_dict.into())],
+                    sequence(alloc, main_contract),
+                    true,
+                )
+                .into(),
+            false,
+        )
+        .into()
 }
 
 #[cfg(test)]

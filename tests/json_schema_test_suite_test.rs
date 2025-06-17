@@ -3,6 +3,7 @@ use std::{io::stderr, path::Path, process::ExitCode};
 use json_schema_to_nickel::inline_lib;
 use libtest_mimic::{Arguments, Trial};
 use nickel_lang_core::{
+    bytecode::ast::AstAlloc,
     error::{report, Error, EvalError, NullReporter},
     eval::cache::lazy::CBNCache,
     program::Program,
@@ -36,7 +37,7 @@ pub fn main() -> ExitCode {
 
     let test_glob = glob::glob(&format!("{test_dir}/**/*.json")).unwrap();
 
-    let ignore_regex = Regex::new(dbg!(&SKIP_TESTS.join("|"))).unwrap();
+    let ignore_regex = Regex::new(&SKIP_TESTS.join("|")).unwrap();
     assert!(ignore_regex.is_match("optional/format/date_0_12"));
 
     let tests: Vec<_> = test_glob
@@ -170,7 +171,8 @@ fn translation_typecheck_test(
     test_case: serde_json::Value,
     is_valid: bool,
 ) {
-    let contract = json_schema_to_nickel::convert(&schema, inline_lib()).unwrap();
+    let alloc = AstAlloc::new();
+    let contract = json_schema_to_nickel::convert(&schema, inline_lib(&alloc), &alloc).unwrap();
 
     let instance: RichTerm = serde_json::from_value(test_case).unwrap();
 

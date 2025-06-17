@@ -7,7 +7,10 @@ use std::{
 
 use clap::Parser;
 use json_schema_to_nickel::{convert, inline_lib};
-use nickel_lang_core::{pretty::*, term::Import};
+use nickel_lang_core::{
+    bytecode::ast::{AstAlloc, Import, Node},
+    pretty::*,
+};
 use terminal_size::{terminal_size, Width};
 
 #[derive(Parser)]
@@ -46,25 +49,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         Box::new(std::io::stdin())
     };
-    let lib_term = if let Some(path) = args.library_path {
-        nickel_lang_core::term::Term::Import(Import::Path {
+    let alloc = AstAlloc::new();
+    let lib_term = if let Some(path) = args.library_path.as_ref() {
+        Node::Import(Import::Path {
             path,
             format: nickel_lang_core::cache::InputFormat::Nickel,
         })
         .into()
     } else if let Some(lib) = args.library_pkg {
-        nickel_lang_core::term::Term::Import(Import::Package { id: lib.into() }).into()
+        Node::Import(Import::Package { id: lib.into() }).into()
     } else {
-        inline_lib()
+        inline_lib(&alloc)
     };
 
     let val: serde_json::Value = serde_json::from_reader(f)?;
-    let contract = convert(&val, lib_term)?;
+    let contract = convert(&val, lib_term, &alloc)?;
 
     let size = terminal_size()
         .map(|(Width(w), _)| w as usize)
         .unwrap_or(80);
-    let pretty_alloc = Allocator::default();
+    let pretty_alloc = nickel_lang_core::bytecode::pretty::Allocator::default();
     let types: DocBuilder<'_, _, ()> = contract.pretty(&pretty_alloc);
 
     println!("# DO NOT EDIT\n# This file was automatically generated using json-schema-to-nickel");
