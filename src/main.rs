@@ -27,6 +27,16 @@ struct Args {
     /// json-schema-to-nickel library available at the right place.
     #[clap(long)]
     library_path: Option<OsString>,
+
+    /// Generate a contract that will import the json-schema-to-nickel Nickel library from a
+    /// package with the given name.
+    ///
+    /// For example, if you provide `--library-pkg=js2n` then the generated contract will
+    /// attempt to import the json-schema-to-nickel library using the syntax `import js2n`.
+    /// This argument does not generate a `Nickel-pkg.ncl` package manifest; you will need
+    /// to provide one that defines the `js2n` package.
+    #[clap(long, conflicts_with = "library_path")]
+    library_pkg: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -42,6 +52,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             format: nickel_lang_core::cache::InputFormat::Nickel,
         })
         .into()
+    } else if let Some(lib) = args.library_pkg {
+        nickel_lang_core::term::Term::Import(Import::Package { id: lib.into() }).into()
     } else {
         inline_lib()
     };
