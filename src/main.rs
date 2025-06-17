@@ -7,7 +7,10 @@ use std::{
 
 use clap::Parser;
 use json_schema_to_nickel::{convert, inline_lib};
-use nickel_lang_core::{pretty::*, term::Import};
+use nickel_lang_core::{
+    bytecode::ast::{Ast, AstAlloc, Import, Node},
+    pretty::*,
+};
 use terminal_size::{terminal_size, Width};
 
 #[derive(Parser)]
@@ -36,14 +39,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         Box::new(std::io::stdin())
     };
+    let alloc = AstAlloc::new();
     let lib_term = if let Some(path) = args.library_path {
-        nickel_lang_core::term::Term::Import(Import::Path {
-            path,
-            format: nickel_lang_core::cache::InputFormat::Nickel,
-        })
-        .into()
+        alloc.alloc(
+            Node::Import(Import::Path {
+                path: &path,
+                format: nickel_lang_core::cache::InputFormat::Nickel,
+            })
+            .into(),
+        )
     } else {
-        inline_lib()
+        inline_lib(&alloc)
     };
 
     let val: serde_json::Value = serde_json::from_reader(f)?;

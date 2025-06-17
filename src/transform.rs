@@ -10,7 +10,15 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use nickel_lang_core::term::{make, record::RecordData, RichTerm, Term};
+use nickel_lang_core::{
+    bytecode::ast::{
+        pattern::Pattern,
+        record::{FieldDef, FieldPathElem},
+        Ast, AstAlloc, LetBinding, Node,
+    },
+    position::TermPos,
+    term::{make, record::RecordData, RichTerm, Term},
+};
 
 use crate::{
     contract::ContractContextData,
@@ -456,7 +464,12 @@ fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
 /// Convert a schema to a nickel contract.
 ///
 /// `lib_import` is a term that imports the json-schema library.
-pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTerm) -> RichTerm {
+pub fn schema_to_nickel<'a>(
+    s: &Schema,
+    refs: &AcyclicReferences,
+    lib_import: &'a Ast<'a>,
+    alloc: &'a AstAlloc,
+) -> &'a Ast<'a> {
     let mut shadowed_names = all_names(s);
     shadowed_names.extend(refs.schemas().flat_map(all_names));
 
@@ -491,23 +504,48 @@ pub fn schema_to_nickel(s: &Schema, refs: &AcyclicReferences, lib_import: RichTe
         accessed.extend(newly_accessed);
     }
 
-    let refs_dict = Term::Record(RecordData {
-        fields: refs_env
-            .into_iter()
-            .map(|(name, value)| (name.into(), value.into()))
-            .collect(),
-        ..Default::default()
-    });
-
-    let mut bindings = vec![(ctx.lib_name(), lib_import)];
-    if ctx.std_name() != "std" {
-        bindings.push((ctx.std_name(), Term::Var("std".into()).into()));
-    };
-    make::let_in(
+    let refs_dict = Node::Record(alloc.record_data(
+        [],
+        refs_env.into_iter().map(|(name, value)| FieldDef {
+            path: &[FieldPathElem::Ident(name.into())],
+            metadata: Default::default(),
+            value: Some(value),
+            pos: TermPos::None,
+        }),
         false,
-        bindings,
-        make::let_one_rec_in(ctx.refs_name(), refs_dict, sequence(main_contract)),
+    ));
+
+    let binding = |name: &str, value| LetBinding {
+        pattern: Pattern::any(name.into()),
+        metadata: Default::default(),
+        value,
+    };
+
+    let mut bindings = vec![binding(ctx.lib_name(), *lib_import)];
+    if ctx.std_name() != "std" {
+        bindings.push(binding(ctx.std_name(), Node::Var("std".into()).into()));
+    }
+    alloc.alloc(
+        alloc
+            .let_block(
+                bindings,
+                alloc
+                    .let_block(
+                        [binding(ctx.refs_name(), refs_dict.into())],
+                        sequence(main_contract),
+                        true,
+                    )
+                    .into(),
+                false,
+            )
+            .into(),
     )
+    // Node::Let { bindings: (), body: (), rec: () }
+    // make::let_in(
+    //     false,
+    //     bindings,
+    //     make::let_one_rec_in(ctx.refs_name(), refs_dict, sequence(main_contract)),
+    // )
 }
 
 #[cfg(test)]
