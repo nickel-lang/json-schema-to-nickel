@@ -47,9 +47,9 @@ pub fn inline_lib(alloc: &AstAlloc) -> &Ast<'_> {
 /// `lib_import` is a term that imports the json-schema library.
 pub fn convert<'ast>(
     val: &serde_json::Value,
-    lib_import: &'ast Ast<'ast>,
+    lib_import: Ast<'ast>,
     alloc: &'ast AstAlloc,
-) -> miette::Result<&'ast Ast<'ast>> {
+) -> miette::Result<Ast<'ast>> {
     let schema: Schema = val.try_into()?;
     let all_refs = resolve_all(val, &schema);
     let refs = AcyclicReferences::new(&all_refs);

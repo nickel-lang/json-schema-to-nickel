@@ -1,10 +1,9 @@
 use std::collections::HashSet;
 
 use nickel_lang_core::{
-    bytecode::ast::{primop::PrimOp, Ast, AstAlloc, Node},
+    bytecode::ast::{primop::PrimOp, typ::TypeUnr, Ast, AstAlloc, Node},
     identifier::LocIdent,
     term::{Number, RichTerm, Term},
-    typ::{EnumRows, RecordRows, Type, TypeF},
 };
 
 pub fn static_access<'a, I, S>(alloc: &'a AstAlloc, record: S, fields: I) -> Ast<'a>
@@ -41,13 +40,8 @@ pub fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool
 }
 
 /// Creates a contract that for checking a Nickel type.
-pub fn type_contract(ty: TypeF<Box<Type>, RecordRows, EnumRows, RichTerm>) -> RichTerm {
-    Term::Type {
-        typ: ty.into(),
-        // We don't actually care about the contract -- it's a runtime thing.
-        contract: Term::Null.into(),
-    }
-    .into()
+pub fn type_contract<'a>(alloc: &'a AstAlloc, ty: TypeUnr<'a>) -> Ast<'a> {
+    alloc.typ(ty.into()).into()
 }
 
 pub fn num(x: &Number) -> RichTerm {

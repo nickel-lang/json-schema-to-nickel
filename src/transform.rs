@@ -17,7 +17,6 @@ use nickel_lang_core::{
         Ast, AstAlloc, LetBinding, Node,
     },
     position::TermPos,
-    term::{make, record::RecordData, RichTerm, Term},
 };
 
 use crate::{
@@ -464,12 +463,12 @@ fn no_collisions_name(taken_names: &HashSet<String>, prefix: &str) -> String {
 /// Convert a schema to a nickel contract.
 ///
 /// `lib_import` is a term that imports the json-schema library.
-pub fn schema_to_nickel<'a>(
+pub fn schema_to_nickel<'ast>(
     s: &Schema,
-    refs: &AcyclicReferences,
-    lib_import: &'a Ast<'a>,
-    alloc: &'a AstAlloc,
-) -> &'a Ast<'a> {
+    refs: &AcyclicReferences<'_>,
+    lib_import: Ast<'ast>,
+    alloc: &'ast AstAlloc,
+) -> Ast<'ast> {
     let mut shadowed_names = all_names(s);
     shadowed_names.extend(refs.schemas().flat_map(all_names));
 
@@ -477,7 +476,7 @@ pub fn schema_to_nickel<'a>(
     let lib_name = no_collisions_name(&shadowed_names, "js2n");
     let std_name = no_collisions_name(&shadowed_names, "std");
 
-    let ctx_data = ContractContextData::new(refs, &lib_name, &std_name, &refs_name);
+    let ctx_data = ContractContextData::new(refs, &lib_name, &std_name, &refs_name, alloc);
     let ctx = ctx_data.ctx();
     let main_contract = s.to_contract(ctx);
 
@@ -495,7 +494,7 @@ pub fn schema_to_nickel<'a>(
             // unwrap: the context shouldn't collect missing references
             refs_env.insert(
                 names.join("."),
-                sequence(refs.get(&name).unwrap().to_contract(ctx)),
+                sequence(alloc, refs.get(&name).unwrap().to_contract(ctx)),
             );
         }
 
@@ -507,7 +506,7 @@ pub fn schema_to_nickel<'a>(
     let refs_dict = Node::Record(alloc.record_data(
         [],
         refs_env.into_iter().map(|(name, value)| FieldDef {
-            path: &[FieldPathElem::Ident(name.into())],
+            path: alloc.alloc_many([FieldPathElem::Ident(name.into())]),
             metadata: Default::default(),
             value: Some(value),
             pos: TermPos::None,
@@ -521,31 +520,23 @@ pub fn schema_to_nickel<'a>(
         value,
     };
 
-    let mut bindings = vec![binding(ctx.lib_name(), *lib_import)];
+    let mut bindings = vec![binding(ctx.lib_name(), lib_import)];
     if ctx.std_name() != "std" {
         bindings.push(binding(ctx.std_name(), Node::Var("std".into()).into()));
     }
-    alloc.alloc(
-        alloc
-            .let_block(
-                bindings,
-                alloc
-                    .let_block(
-                        [binding(ctx.refs_name(), refs_dict.into())],
-                        sequence(main_contract),
-                        true,
-                    )
-                    .into(),
-                false,
-            )
-            .into(),
-    )
-    // Node::Let { bindings: (), body: (), rec: () }
-    // make::let_in(
-    //     false,
-    //     bindings,
-    //     make::let_one_rec_in(ctx.refs_name(), refs_dict, sequence(main_contract)),
-    // )
+    alloc
+        .let_block(
+            bindings,
+            alloc
+                .let_block(
+                    [binding(ctx.refs_name(), refs_dict.into())],
+                    sequence(alloc, main_contract),
+                    true,
+                )
+                .into(),
+            false,
+        )
+        .into()
 }
 
 #[cfg(test)]

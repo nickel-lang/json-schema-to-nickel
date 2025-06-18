@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let val: serde_json::Value = serde_json::from_reader(f)?;
-    let contract = convert(&val, lib_term)?;
+    let contract = convert(&val, lib_term, &alloc)?;
 
     let size = terminal_size()
         .map(|(Width(w), _)| w as usize)

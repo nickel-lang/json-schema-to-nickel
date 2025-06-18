@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use nickel_lang_core::{
+    bytecode::ast::Ast,
     identifier::LocIdent,
     label::Label,
     mk_app,
@@ -126,7 +127,7 @@ impl Obj {
     /// Converts this object schema to a Nickel contract.
     ///
     /// Can return multiple contracts that should be applied in sequence.
-    pub fn to_contract(&self, ctx: ContractContext) -> Vec<RichTerm> {
+    pub fn to_contract<'ast>(&self, ctx: ContractContext<'_, 'ast, '_>) -> Vec<Ast<'ast>> {
         match self {
             Obj::Any => vec![type_contract(TypeF::Dict {
                 type_fields: Box::new(TypeF::Dyn.into()),
