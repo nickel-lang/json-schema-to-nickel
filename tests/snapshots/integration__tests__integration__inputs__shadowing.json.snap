@@ -14,7 +14,7 @@ let rec refs__
               String,
               { foo | Number | optional, .. },
               Array Dyn
-            ],
+            ]
     }
     in
   {

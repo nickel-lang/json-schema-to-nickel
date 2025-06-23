@@ -393,7 +393,7 @@ impl Schema {
                     vec![
                         ctx.std("enum.TagOrString"),
                         ctx.alloc()
-                            .typ(TypeF::Enum(EnumRows(enum_rows).into()).into())
+                            .typ(TypeF::Enum(EnumRows(enum_rows)).into())
                             .into(),
                     ]
                 } else {
@@ -519,17 +519,12 @@ impl Array {
             Array::PerItem { initial, rest } => {
                 let initial = initial.iter().map(|s| ctx.sequence(s.to_contract(ctx)));
                 let rest = ctx.sequence(rest.to_contract(ctx));
-                ctx.alloc()
-                    .app(
-                        ctx.js2n("array.Items"),
-                        [ctx.alloc().array(initial).into(), rest],
-                    )
-                    .into()
+                ctx.alloc().app(
+                    ctx.js2n("array.Items"),
+                    [ctx.alloc().array(initial).into(), rest],
+                )
             }
-            Array::MaxItems(n) => ctx
-                .alloc()
-                .app(ctx.js2n("array.MaxItems"), [ctx.num(n)])
-                .into(),
+            Array::MaxItems(n) => ctx.alloc().app(ctx.js2n("array.MaxItems"), [ctx.num(n)]),
             Array::MinItems(n) => ctx.alloc().app(ctx.js2n("array.MinItems"), [ctx.num(n)]),
             Array::UniqueItems => ctx.js2n("array.UniqueItems").node,
             Array::Contains(schema) => {

@@ -28,7 +28,7 @@ use nickel_lang_core::{
 use references::{resolve_all, AcyclicReferences};
 use schema::Schema;
 
-pub fn inline_lib(alloc: &AstAlloc) -> &Ast<'_> {
+pub fn inline_lib(alloc: &AstAlloc) -> Ast<'_> {
     let lib_ncl = include_bytes!(concat!(env!("OUT_DIR"), "/main.ncl"));
     let lib_ncl = String::from_utf8_lossy(lib_ncl);
 
@@ -39,7 +39,7 @@ pub fn inline_lib(alloc: &AstAlloc) -> &Ast<'_> {
         lib_ncl.to_string(),
     );
     let lexer = Lexer::new(cache.sources.source(file_id));
-    alloc.alloc(parser.parse_strict(alloc, file_id, lexer).unwrap())
+    parser.parse_strict(alloc, file_id, lexer).unwrap()
 }
 
 /// Create a Nickel contract from a JSON value containing a JSON Schema.

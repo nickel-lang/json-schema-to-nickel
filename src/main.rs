@@ -8,7 +8,7 @@ use std::{
 use clap::Parser;
 use json_schema_to_nickel::{convert, inline_lib};
 use nickel_lang_core::{
-    bytecode::ast::{Ast, AstAlloc, Import, Node},
+    bytecode::ast::{AstAlloc, Import, Node},
     pretty::*,
 };
 use terminal_size::{terminal_size, Width};
@@ -40,14 +40,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         Box::new(std::io::stdin())
     };
     let alloc = AstAlloc::new();
-    let lib_term = if let Some(path) = args.library_path {
-        alloc.alloc(
-            Node::Import(Import::Path {
-                path: &path,
-                format: nickel_lang_core::cache::InputFormat::Nickel,
-            })
-            .into(),
-        )
+    let lib_term = if let Some(path) = args.library_path.as_ref() {
+        Node::Import(Import::Path {
+            path,
+            format: nickel_lang_core::cache::InputFormat::Nickel,
+        })
+        .into()
     } else {
         inline_lib(&alloc)
     };
@@ -58,7 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let size = terminal_size()
         .map(|(Width(w), _)| w as usize)
         .unwrap_or(80);
-    let pretty_alloc = Allocator::default();
+    let pretty_alloc = nickel_lang_core::bytecode::pretty::Allocator::default();
     let types: DocBuilder<'_, _, ()> = contract.pretty(&pretty_alloc);
 
     println!("# DO NOT EDIT\n# This file was automatically generated using json-schema-to-nickel");

@@ -88,7 +88,7 @@ impl<'a, 'ast, 'refs> ContractContextData<'a, 'ast, 'refs> {
     }
 }
 
-impl<'data, 'ast, 'refs> ContractContext<'data, 'ast, 'refs> {
+impl<'ast, 'refs> ContractContext<'_, 'ast, 'refs> {
     /// Returns a Nickel term pointing to a path in our contracts library.
     pub fn js2n(&self, path: &str) -> Ast<'ast> {
         static_access(self.inner.alloc, self.inner.lib_name, path.split('.'))
