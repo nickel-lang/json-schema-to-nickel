@@ -1,0 +1,9 @@
+{
+  "$comment": "basic record contract",
+  "type": "object",
+  "properties": {
+    "foo": {
+      "type": "number"
+    }
+  }
+}
