@@ -510,10 +510,11 @@ impl Array {
                         [ctx.sequence(schema.to_contract(ctx))],
                     )
                 } else {
-                    ctx.alloc().typ(
+                    let elt = ctx.alloc().alloc(
                         TypeF::Contract(ctx.alloc().alloc(ctx.sequence(schema.to_contract(ctx))))
                             .into(),
-                    )
+                    );
+                    ctx.alloc().typ(TypeF::Array(elt).into())
                 }
             }
             Array::PerItem { initial, rest } => {
