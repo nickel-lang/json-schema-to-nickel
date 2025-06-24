@@ -488,12 +488,10 @@ pub fn schema_to_nickel<'ast>(
     let mut unfollowed_refs = accessed.clone();
     while !unfollowed_refs.is_empty() {
         for (name, eager) in unfollowed_refs {
-            // FIXME: once we convert to the new ast, make this an actual nested access
-            // For now, it's a single access with a name like "foo.bar".
-            let names: Vec<_> = ctx.ref_name(&name, eager).collect();
+            let path: Vec<_> = ctx.ref_name(&name, eager).map(|s| s.to_owned()).collect();
             // unwrap: the context shouldn't collect missing references
             refs_env.insert(
-                names.join("."),
+                path,
                 sequence(alloc, refs.get(&name).unwrap().to_contract(ctx)),
             );
         }
@@ -505,8 +503,8 @@ pub fn schema_to_nickel<'ast>(
 
     let refs_dict = Node::Record(alloc.record_data(
         [],
-        refs_env.into_iter().map(|(name, value)| FieldDef {
-            path: alloc.alloc_many([FieldPathElem::Ident(name.into())]),
+        refs_env.into_iter().map(|(path, value)| FieldDef {
+            path: alloc.alloc_many(path.into_iter().map(|s| FieldPathElem::Ident(s.into()))),
             metadata: Default::default(),
             value: Some(value),
             pos: TermPos::None,

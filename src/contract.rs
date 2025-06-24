@@ -32,10 +32,7 @@ pub struct ContractContextData<'a, 'ast, 'refs> {
     /// containing all the json-schema refs. Guaranteed not to be shadowed.
     ///
     /// For example, the json-schema ref "#/definitions/glob" can be found at
-    /// the Nickel path `<refs_name>."#/definitions/glob"`.
-    ///
-    /// (TODO: after switching to the new ast, this will be `<refs_name>.definitions.glob`.
-    /// Don't forget to update this doc!)
+    /// the Nickel path `<refs_name>.definitions.glob`.
     refs_name: &'a str,
     /// In general, a json-schema reference might be followed in an eager context
     /// *and* in a lazy context, and so we'll have to generate both the lazy and
@@ -118,19 +115,14 @@ impl<'ast, 'refs> ContractContext<'_, 'ast, 'refs> {
     /// Returns a Nickel term pointing to a contract for the json-schema reference `name`.
     pub fn ref_term(&self, name: &str) -> Ast<'ast> {
         let eager = self.eager && !self.inner.always_eager_refs.get(name).unwrap_or(&true);
-        // TODO: once we convert to the new ast, make this an actual nested access
-        let names: Vec<_> = self.ref_name(name, eager).collect();
+        let names = self.ref_name(name, eager);
 
         if self.inner.refs.get(name).is_some() {
             self.inner
                 .accessed_refs
                 .borrow_mut()
                 .insert((name.to_owned(), eager));
-            static_access(
-                self.inner.alloc,
-                self.inner.refs_name,
-                [names.join(".").as_str()],
-            )
+            static_access(self.inner.alloc, self.inner.refs_name, names)
         } else {
             // TODO: warn here, because ideally we trim missing references early on.
             static_access(self.inner.alloc, self.inner.lib_name, ["Always"])
