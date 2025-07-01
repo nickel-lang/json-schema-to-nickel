@@ -71,6 +71,12 @@
         json-schema-to-nickel = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
         });
+        nickel = inputs.nickel.packages.${system}.default;
+        generate-ci = pkgs.writeShellScriptBin "generate-ci" ''
+          REPO_ROOT=$(${pkgs.git}/bin/git rev-parse --show-toplevel)
+
+          ${nickel}/bin/nickel export --format yaml -o "$REPO_ROOT/.github/workflows/continuous-integration.yml" "$REPO_ROOT/.github/workflows/continuous-integration.ncl"
+        '';
       in
       {
         checks.${system} = {
@@ -93,6 +99,7 @@
         packages.${system} = rec {
           inherit json-schema-to-nickel;
           default = json-schema-to-nickel;
+          inherit generate-ci;
         };
 
         devShells.${system}.default = pkgs.mkShell {
