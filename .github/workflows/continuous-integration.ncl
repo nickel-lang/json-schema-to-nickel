@@ -1,3 +1,8 @@
+# This file configures our github workflows, but in order for changes to take
+# effect, it needs to be exported to yaml and the yaml changes need to be
+# committed.
+#
+# Run `nix run .#generate-ci` to generate the yaml.
 let workflow = import "workflow.ncl"
 in
 let rec
@@ -41,7 +46,6 @@ in
     "build-and-test-macos" = {
       runs-on = "macos-latest",
       steps = check_steps,
-      continue-on-error = true,
     }
   },
 } | workflow.Workflow
