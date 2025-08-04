@@ -12,38 +12,11 @@
 # get names like "build-and-test (ubuntu-latest, stable)", and we can't
 # imitate names like these without a matrix because spaces are disallowed
 # in job names.
-let WorkflowExport = import "generated.ncl" in
+let
+  WorkflowExport = import "generated-workflow.ncl",
+  util = import "util.ncl",
+in
 {
-  util | not_exported = {
-    UniqueNames
-      | doc m%"
-        A contract that you can apply to an array of records, each of which has a `name` field.
-
-        Checks that the `name` fields are all unique.
-
-        TODO: we could make this a fancy custom contract so that it can report the positions of the bad strings...
-
-        # Examples
-
-        ```nickel multiline
-        [ { name = "hi" }, { name = "bye" } ] | UniqueNames
-
-        [ { name = "hi" }, { name = "bye" }, { name = "hi" } ] | UniqueNames
-        # => error: name `hi` is duplicated
-        ```
-      "%
-      =
-        std.contract.from_validator (fun vals =>
-          let vals = vals | Array { name | String, .. } in
-          let name_counts = vals |> std.array.fold_left (fun acc val => std.record.update val.name ((std.record.get_or val.name 0 acc) + 1) acc) {} in
-          let duplicated = name_counts |> std.record.filter (fun _name count => count > 1) |> std.record.fields in
-          if std.array.length duplicated == 0 then
-            'Ok
-          else
-            'Error { message = "name `%{std.array.first duplicated}` is duplicated" }
-        ),
-  },
-
   Job = {
     runs-on | String,
     continue-on-error | Bool | default = false,
