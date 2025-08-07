@@ -174,8 +174,8 @@ fn translation_typecheck_test(
 
     let instance: RichTerm = serde_json::from_value(test_case).unwrap();
 
-    let program = format!("{} | ({})", instance, contract);
-    eprintln!("{}", instance);
+    let program = format!("{instance} | ({contract})");
+    eprintln!("{instance}");
 
     let mut prog = Program::<CBNCache>::new_from_source(
         StringReader::new(&program),
