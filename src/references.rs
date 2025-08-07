@@ -37,7 +37,7 @@ use std::{
 use fluent_uri;
 use miette::miette;
 
-use nickel_lang_core::term::RichTerm;
+use nickel_lang_core::bytecode::ast::{Ast, AstAlloc};
 use serde_json::Value;
 
 use crate::{
@@ -72,13 +72,10 @@ impl TryFrom<Vec<String>> for FieldPath {
     }
 }
 
-impl From<FieldPath> for RichTerm {
-    fn from(field_path: FieldPath) -> Self {
+impl FieldPath {
+    pub fn to_ast<'ast>(&self, alloc: &'ast AstAlloc) -> Ast<'ast> {
         // unwrap(): the `FieldPath` struct guarantees that the path is non-empty by construction.
-        static_access(
-            field_path.path.first().unwrap(),
-            field_path.path.iter().skip(1),
-        )
+        static_access(alloc, self.path.first().unwrap(), self.path.iter().skip(1))
     }
 }
 

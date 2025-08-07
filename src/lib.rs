@@ -21,15 +21,14 @@ pub mod typ;
 pub(crate) mod utils;
 
 use nickel_lang_core::{
-    bytecode::ast::{compat::ToMainline, AstAlloc},
+    bytecode::ast::{Ast, AstAlloc},
     cache::{CacheHub, SourcePath},
     parser::{grammar::TermParser, lexer::Lexer, ErrorTolerantParser},
-    term::RichTerm,
 };
 use references::{resolve_all, AcyclicReferences};
 use schema::Schema;
 
-pub fn inline_lib() -> RichTerm {
+pub fn inline_lib(alloc: &AstAlloc) -> Ast<'_> {
     let lib_ncl = include_bytes!(concat!(env!("OUT_DIR"), "/main.ncl"));
     let lib_ncl = String::from_utf8_lossy(lib_ncl);
 
@@ -40,16 +39,17 @@ pub fn inline_lib() -> RichTerm {
         lib_ncl.to_string(),
     );
     let lexer = Lexer::new(cache.sources.source(file_id));
-    parser
-        .parse_strict(&AstAlloc::new(), file_id, lexer)
-        .unwrap()
-        .to_mainline()
+    parser.parse_strict(alloc, file_id, lexer).unwrap()
 }
 
 /// Create a Nickel contract from a JSON value containing a JSON Schema.
 ///
 /// `lib_import` is a term that imports the json-schema library.
-pub fn convert(val: &serde_json::Value, lib_import: RichTerm) -> miette::Result<RichTerm> {
+pub fn convert<'ast>(
+    val: &serde_json::Value,
+    lib_import: Ast<'ast>,
+    alloc: &'ast AstAlloc,
+) -> miette::Result<Ast<'ast>> {
     let schema: Schema = val.try_into()?;
     let all_refs = resolve_all(val, &schema);
     let refs = AcyclicReferences::new(&all_refs);
@@ -61,5 +61,7 @@ pub fn convert(val: &serde_json::Value, lib_import: RichTerm) -> miette::Result<
     let schema = transform::inline_refs(schema, &refs);
     let schema = transform::simplify(schema, &refs);
 
-    Ok(transform::schema_to_nickel(&schema, &refs, lib_import))
+    Ok(transform::schema_to_nickel(
+        &schema, &refs, lib_import, alloc,
+    ))
 }

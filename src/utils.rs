@@ -1,19 +1,23 @@
 use std::collections::HashSet;
 
 use nickel_lang_core::{
+    bytecode::ast::{primop::PrimOp, typ::TypeUnr, Ast, AstAlloc, Node},
     identifier::LocIdent,
-    mk_app,
-    term::{array::ArrayAttrs, make, Number, RichTerm, Term},
-    typ::{EnumRows, RecordRows, Type, TypeF},
 };
 
-pub fn static_access<I, S>(record: S, fields: I) -> RichTerm
+pub fn static_access<I, S>(alloc: &AstAlloc, record: S, fields: I) -> Ast<'_>
 where
     I: IntoIterator<Item = S>,
     I::IntoIter: DoubleEndedIterator,
     S: Into<LocIdent>,
 {
-    make::static_access(make::var(record), fields)
+    let mut ast = Node::Var(record.into()).into();
+    for f in fields.into_iter() {
+        ast = alloc
+            .prim_op(PrimOp::RecordStatAccess(f.into()), [ast])
+            .into();
+    }
+    ast
 }
 
 /// Replace special escaping sequences by the actual character within one element of a JSON pointer
@@ -35,27 +39,20 @@ pub fn distinct<T: std::hash::Hash + Eq>(items: impl Iterator<Item = T>) -> bool
 }
 
 /// Creates a contract that for checking a Nickel type.
-pub fn type_contract(ty: TypeF<Box<Type>, RecordRows, EnumRows, RichTerm>) -> RichTerm {
-    Term::Type {
-        typ: ty.into(),
-        // We don't actually care about the contract -- it's a runtime thing.
-        contract: Term::Null.into(),
-    }
-    .into()
-}
-
-pub fn num(x: &Number) -> RichTerm {
-    Term::Num(x.clone()).into()
+pub fn type_contract<'a>(alloc: &'a AstAlloc, ty: TypeUnr<'a>) -> Ast<'a> {
+    alloc.typ(ty.into()).into()
 }
 
 /// Turns a collection of contracts into a single contract.
-pub fn sequence(mut contracts: Vec<RichTerm>) -> RichTerm {
+pub fn sequence<'a>(alloc: &'a AstAlloc, mut contracts: Vec<Ast<'a>>) -> Ast<'a> {
     if contracts.len() == 1 {
         contracts.pop().unwrap()
     } else {
-        mk_app!(
-            static_access("std", ["contract", "Sequence"]),
-            Term::Array(contracts.into_iter().collect(), ArrayAttrs::default())
-        )
+        alloc
+            .app(
+                static_access(alloc, "std", ["contract", "Sequence"]),
+                [alloc.array(contracts).into()],
+            )
+            .into()
     }
 }

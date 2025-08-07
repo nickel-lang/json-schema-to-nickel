@@ -720,8 +720,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 [[package]]
 name = "nickel-lang-core"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d4be50b1f03dbdafd0f1bbcfdcc77ac956dc7a850ade51cdf4d8f90505b2b2a"
+source = "git+https://github.com/tweag/nickel#0e83d7b6d96b35cfce0acdbb1ed290911f674d8b"
 dependencies = [
  "bumpalo",
  "codespan",
@@ -758,8 +757,7 @@ dependencies = [
 [[package]]
 name = "nickel-lang-vector"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "870c323d81061fc47db4aa7346f6f3492f3e4bb8bd5dd8b7c85ac9d0c9709f0c"
+source = "git+https://github.com/tweag/nickel#0e83d7b6d96b35cfce0acdbb1ed290911f674d8b"
 dependencies = [
  "imbl-sized-chunks",
  "serde",
