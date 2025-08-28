@@ -6,10 +6,12 @@
 //! than do that, our representation always makes boolean operations explicit.
 
 use nickel_lang_core::{
+    bytecode::ast::{
+        typ::{EnumRows, EnumRowsUnr},
+        Ast,
+    },
     identifier::Ident,
-    mk_app,
-    term::{array::ArrayAttrs, RichTerm, Term},
-    typ::{EnumRowF, EnumRows, EnumRowsF, TypeF},
+    typ::{EnumRowF, EnumRowsF, TypeF},
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -19,7 +21,6 @@ use crate::{
     object::Obj,
     references::AcyclicReferences,
     typ::{InstanceType, InstanceTypeSet},
-    utils::{num, sequence, type_contract},
 };
 
 use nickel_lang_core::term::Number;
@@ -358,49 +359,53 @@ impl Schema {
     /// (or combine them using `std.contract.Sequence`). The reason we return a
     /// collection instead of combining them for you is so that if you're applying
     /// these contracts to a record field then you can apply them individually.
-    pub fn to_contract(&self, ctx: ContractContext) -> Vec<RichTerm> {
+    pub fn to_contract<'ast>(&self, ctx: ContractContext<'_, 'ast, '_>) -> Vec<Ast<'ast>> {
         match self {
             Schema::Always => vec![ctx.js2n("Always")],
             Schema::Never => vec![ctx.js2n("Never")],
             Schema::Null => vec![ctx.js2n("Null")],
-            Schema::Boolean => vec![type_contract(TypeF::Bool)],
+            Schema::Boolean => vec![ctx.alloc().typ(TypeF::Bool.into()).into()],
             Schema::Const(val) => {
-                let nickel_val: RichTerm = serde_json::from_value(val.clone()).unwrap();
+                let nickel_val: Ast = ctx.from_json(val);
                 if ctx.is_eager() {
-                    vec![mk_app!(ctx.js2n("Const"), nickel_val)]
+                    vec![ctx.alloc().app(ctx.js2n("Const"), [nickel_val]).into()]
                 } else {
-                    vec![mk_app!(ctx.std("contract.Equal"), nickel_val)]
+                    vec![ctx
+                        .alloc()
+                        .app(ctx.std("contract.Equal"), [nickel_val])
+                        .into()]
                 }
             }
             Schema::Enum(vec) => {
                 if let Some(strings) = vec.iter().map(|v| v.as_str()).collect::<Option<Vec<_>>>() {
-                    let enum_rows: EnumRows =
-                        strings.iter().fold(EnumRows(EnumRowsF::Empty), |acc, s| {
-                            let row = EnumRowF {
-                                id: Ident::new(s).into(),
-                                typ: None,
-                            };
+                    let enum_rows: EnumRowsUnr = strings.iter().fold(EnumRowsF::Empty, |acc, s| {
+                        let row = EnumRowF {
+                            id: Ident::new(s).into(),
+                            typ: None,
+                        };
 
-                            EnumRows(EnumRowsF::Extend {
-                                row,
-                                tail: Box::new(acc),
-                            })
-                        });
+                        EnumRowsF::Extend {
+                            row,
+                            tail: ctx.alloc().enum_rows(acc),
+                        }
+                    });
 
                     vec![
                         ctx.std("enum.TagOrString"),
-                        type_contract(TypeF::Enum(enum_rows)),
+                        ctx.alloc()
+                            .typ(TypeF::Enum(EnumRows(enum_rows)).into())
+                            .into(),
                     ]
                 } else {
-                    vec![mk_app!(
-                        ctx.js2n("Enum"),
-                        Term::Array(
-                            vec.iter()
-                                .map(|val| serde_json::from_value(val.clone()).unwrap())
-                                .collect(),
-                            ArrayAttrs::default()
+                    vec![ctx
+                        .alloc()
+                        .app(
+                            ctx.js2n("Enum"),
+                            [ctx.alloc()
+                                .array(vec.iter().map(|val| ctx.from_json(val)))
+                                .into()],
                         )
-                    )]
+                        .into()]
                 }
             }
             Schema::Object(obj) => obj.to_contract(ctx),
@@ -410,116 +415,125 @@ impl Schema {
             Schema::Ref(s) => vec![ctx.ref_term(s)],
             Schema::AnyOf(vec) => match vec.as_slice() {
                 [Schema::Null, other] | [other, Schema::Null] => {
-                    vec![mk_app!(
-                        ctx.js2n("Nullable"),
-                        sequence(other.to_contract(ctx))
-                    )]
+                    vec![ctx
+                        .alloc()
+                        .app(ctx.js2n("Nullable"), [ctx.sequence(other.to_contract(ctx))])
+                        .into()]
                 }
                 _ => {
                     let eager = ctx.is_eager() || !eagerly_disjoint(vec.iter(), ctx.refs());
                     let ctx = if eager { ctx.eager() } else { ctx.lazy() };
-                    let contracts = vec.iter().map(|s| sequence(s.to_contract(ctx))).collect();
-                    vec![mk_app!(
-                        ctx.std("contract.any_of"),
-                        Term::Array(contracts, ArrayAttrs::default())
-                    )]
+                    let contracts = vec.iter().map(|s| ctx.sequence(s.to_contract(ctx)));
+                    vec![ctx
+                        .alloc()
+                        .app(
+                            ctx.std("contract.any_of"),
+                            [ctx.alloc().array(contracts).into()],
+                        )
+                        .into()]
                 }
             },
             Schema::OneOf(vec) => {
-                let contracts = vec
-                    .iter()
-                    .map(|s| sequence(s.to_contract(ctx.eager())))
-                    .collect();
-                vec![mk_app!(
-                    ctx.js2n("OneOf"),
-                    Term::Array(contracts, ArrayAttrs::default())
-                )]
+                let contracts = vec.iter().map(|s| ctx.sequence(s.to_contract(ctx.eager())));
+                vec![ctx
+                    .alloc()
+                    .app(ctx.js2n("OneOf"), [ctx.alloc().array(contracts).into()])
+                    .into()]
             }
             Schema::AllOf(vec) => vec.iter().flat_map(|s| s.to_contract(ctx)).collect(),
             Schema::IfThenElse { iph, then, els } => {
                 // The "if" contract always needs to be checked eagerly.
-                let iph = sequence(iph.to_contract(ctx.eager()));
-                let then = sequence(then.to_contract(ctx));
-                let els = sequence(els.to_contract(ctx));
-                vec![mk_app!(ctx.js2n("IfThenElse"), iph, then, els)]
+                let iph = ctx.sequence(iph.to_contract(ctx.eager()));
+                let then = ctx.sequence(then.to_contract(ctx));
+                let els = ctx.sequence(els.to_contract(ctx));
+                vec![ctx
+                    .alloc()
+                    .app(ctx.js2n("IfThenElse"), [iph, then, els])
+                    .into()]
             }
             Schema::Not(schema) => {
-                vec![mk_app!(
-                    ctx.std("contract.not"),
-                    sequence(schema.to_contract(ctx.eager()))
-                )]
+                vec![ctx
+                    .alloc()
+                    .app(
+                        ctx.std("contract.not"),
+                        [ctx.sequence(schema.to_contract(ctx.eager()))],
+                    )
+                    .into()]
             }
         }
     }
 }
 
 impl Str {
-    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
-        match self {
-            Str::Any => type_contract(TypeF::String),
-            Str::MaxLength(n) => {
-                mk_app!(ctx.js2n("string.MaxLength"), num(n))
-            }
-            Str::MinLength(n) => {
-                mk_app!(ctx.js2n("string.MinLength"), num(n))
-            }
-            Str::Pattern(s) => mk_app!(ctx.std("string.Matches"), Term::Str(s.to_owned().into())),
-        }
+    pub fn to_contract<'ast>(&self, ctx: ContractContext<'_, 'ast, '_>) -> Ast<'ast> {
+        let node = match self {
+            Str::Any => ctx.alloc().typ(TypeF::String.into()),
+            Str::MaxLength(n) => ctx.alloc().app(ctx.js2n("string.MaxLength"), [ctx.num(n)]),
+            Str::MinLength(n) => ctx.alloc().app(ctx.js2n("string.MinLength"), [ctx.num(n)]),
+            Str::Pattern(s) => ctx
+                .alloc()
+                .app(ctx.std("string.Matches"), [ctx.alloc().string(s).into()]),
+        };
+        node.into()
     }
 }
 
 impl Num {
-    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
-        match self {
-            Num::Any => type_contract(TypeF::Number),
-            Num::MultipleOf(x) => mk_app!(ctx.js2n("number.MultipleOf"), num(x)),
-            Num::Maximum(x) => mk_app!(ctx.js2n("number.Maximum"), num(x)),
-            Num::Minimum(x) => mk_app!(ctx.js2n("number.Minimum"), num(x)),
-            Num::ExclusiveMinimum(x) => {
-                mk_app!(ctx.js2n("number.ExclusiveMinimum"), num(x))
-            }
-            Num::ExclusiveMaximum(x) => {
-                mk_app!(ctx.js2n("number.ExclusiveMaximum"), num(x))
-            }
-            Num::Integer => ctx.std("number.Integer"),
-        }
+    pub fn to_contract<'ast>(&self, ctx: ContractContext<'_, 'ast, '_>) -> Ast<'ast> {
+        let node = match self {
+            Num::Any => ctx.alloc().typ(TypeF::Number.into()),
+            Num::MultipleOf(x) => ctx.alloc().app(ctx.js2n("number.MultipleOf"), [ctx.num(x)]),
+            Num::Maximum(x) => ctx.alloc().app(ctx.js2n("number.Maximum"), [ctx.num(x)]),
+            Num::Minimum(x) => ctx.alloc().app(ctx.js2n("number.Minimum"), [ctx.num(x)]),
+            Num::ExclusiveMinimum(x) => ctx
+                .alloc()
+                .app(ctx.js2n("number.ExclusiveMinimum"), [ctx.num(x)]),
+            Num::ExclusiveMaximum(x) => ctx
+                .alloc()
+                .app(ctx.js2n("number.ExclusiveMaximum"), [ctx.num(x)]),
+            Num::Integer => ctx.std("number.Integer").node,
+        };
+        node.into()
     }
 }
 
 impl Array {
-    pub fn to_contract(&self, ctx: ContractContext) -> RichTerm {
-        match self {
-            Array::Any => type_contract(TypeF::Array(Box::new(TypeF::Dyn.into()))),
+    pub fn to_contract<'ast>(&self, ctx: ContractContext<'_, 'ast, '_>) -> Ast<'ast> {
+        let node = match self {
+            Array::Any => ctx
+                .alloc()
+                .typ(TypeF::Array(ctx.alloc().type_data(TypeF::Dyn, Default::default())).into()),
             Array::AllItems(schema) => {
                 if ctx.is_eager() {
-                    mk_app!(ctx.js2n("array.ArrayOf"), sequence(schema.to_contract(ctx)))
+                    ctx.alloc().app(
+                        ctx.js2n("array.ArrayOf"),
+                        [ctx.sequence(schema.to_contract(ctx))],
+                    )
                 } else {
-                    type_contract(TypeF::Array(Box::new(
-                        TypeF::Contract(sequence(schema.to_contract(ctx))).into(),
-                    )))
+                    let elt = ctx.alloc().alloc(
+                        TypeF::Contract(ctx.alloc().alloc(ctx.sequence(schema.to_contract(ctx))))
+                            .into(),
+                    );
+                    ctx.alloc().typ(TypeF::Array(elt).into())
                 }
             }
             Array::PerItem { initial, rest } => {
-                let initial = initial.iter().map(|s| sequence(s.to_contract(ctx)));
-                let rest = sequence(rest.to_contract(ctx));
-                mk_app!(
+                let initial = initial.iter().map(|s| ctx.sequence(s.to_contract(ctx)));
+                let rest = ctx.sequence(rest.to_contract(ctx));
+                ctx.alloc().app(
                     ctx.js2n("array.Items"),
-                    Term::Array(initial.collect(), ArrayAttrs::default()),
-                    rest
+                    [ctx.alloc().array(initial).into(), rest],
                 )
             }
-            Array::MaxItems(n) => {
-                mk_app!(ctx.js2n("array.MaxItems"), num(n))
-            }
-            Array::MinItems(n) => {
-                mk_app!(ctx.js2n("array.MinItems"), num(n))
-            }
-            Array::UniqueItems => ctx.js2n("array.UniqueItems"),
+            Array::MaxItems(n) => ctx.alloc().app(ctx.js2n("array.MaxItems"), [ctx.num(n)]),
+            Array::MinItems(n) => ctx.alloc().app(ctx.js2n("array.MinItems"), [ctx.num(n)]),
+            Array::UniqueItems => ctx.js2n("array.UniqueItems").node,
             Array::Contains(schema) => {
-                let contract = sequence(schema.to_contract(ctx.eager()));
-                mk_app!(ctx.js2n("array.Contains"), contract)
+                let contract = ctx.sequence(schema.to_contract(ctx.eager()));
+                ctx.alloc().app(ctx.js2n("array.Contains"), [contract])
             }
-        }
+        };
+        node.into()
     }
 }
 

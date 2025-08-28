@@ -6,24 +6,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use nickel_lang_core::{
-    identifier::LocIdent,
-    label::Label,
-    mk_app,
-    term::{
-        array::ArrayAttrs,
-        make,
-        record::{Field, FieldMetadata, RecordAttrs, RecordData},
-        LabeledType, Number, RichTerm, Term, TypeAnnotation,
-    },
+    bytecode::ast::{builder, record::FieldMetadata, Ast, Node},
+    term::Number,
     typ::{DictTypeFlavour, TypeF},
 };
 use serde::Serialize;
 
-use crate::{
-    contract::ContractContext,
-    schema::Schema,
-    utils::{num, sequence, type_contract},
-};
+use crate::{contract::ContractContext, schema::Schema, utils::type_contract};
 
 /// A schema for validating objects.
 ///
@@ -126,102 +115,144 @@ impl Obj {
     /// Converts this object schema to a Nickel contract.
     ///
     /// Can return multiple contracts that should be applied in sequence.
-    pub fn to_contract(&self, ctx: ContractContext) -> Vec<RichTerm> {
+    pub fn to_contract<'ast>(&self, ctx: ContractContext<'_, 'ast, '_>) -> Vec<Ast<'ast>> {
         match self {
-            Obj::Any => vec![type_contract(TypeF::Dict {
-                type_fields: Box::new(TypeF::Dyn.into()),
-                flavour: nickel_lang_core::typ::DictTypeFlavour::Contract,
-            })],
+            Obj::Any => vec![type_contract(
+                ctx.alloc(),
+                TypeF::Dict {
+                    type_fields: ctx.alloc().type_data(TypeF::Dyn, Default::default()),
+                    flavour: nickel_lang_core::typ::DictTypeFlavour::Contract,
+                },
+            )],
             Obj::Properties(op) => op.to_special_contract(ctx).unwrap_or_else(|| {
                 let additional = match op.additional_properties.as_deref() {
-                    Some(Schema::Never) => Term::Enum("None".into()),
-                    Some(s) => Term::EnumVariant {
-                        tag: "Some".into(),
-                        arg: sequence(s.to_contract(ctx)),
-                        attrs: Default::default(),
+                    Some(Schema::Never) => Node::EnumVariant {
+                        tag: "None".into(),
+                        arg: None,
                     },
-                    None => Term::EnumVariant {
+                    Some(s) => Node::EnumVariant {
                         tag: "Some".into(),
-                        arg: type_contract(TypeF::Dyn),
-                        attrs: Default::default(),
+                        arg: Some(ctx.alloc().alloc(ctx.sequence(s.to_contract(ctx)))),
+                    },
+                    None => Node::EnumVariant {
+                        tag: "Some".into(),
+                        arg: Some(ctx.alloc().alloc(type_contract(ctx.alloc(), TypeF::Dyn))),
                     },
                 };
-                let properties = Term::Record(RecordData::with_field_values(
-                    op.properties
-                        .iter()
-                        .map(|(k, v)| (k.into(), sequence(v.schema.to_contract(ctx)))),
-                ));
-                let required = Term::Record(RecordData::with_field_values(
-                    op.properties.iter().filter_map(|(k, v)| {
-                        if !v.optional {
-                            Some((k.into(), Term::Bool(true).into()))
-                        } else {
-                            None
-                        }
-                    }),
-                ));
-                let patterns = Term::Record(RecordData::with_field_values(
-                    op.pattern_properties
-                        .iter()
-                        .map(|(k, v)| (k.into(), sequence(v.to_contract(ctx)))),
-                ));
+                let properties = builder::Record::new()
+                    .fields(
+                        ctx.alloc(),
+                        op.properties.iter().map(|(k, v)| {
+                            builder::Field::name(k).value(ctx.sequence(v.schema.to_contract(ctx)))
+                        }),
+                    )
+                    .build(ctx.alloc());
+                let required = builder::Record::new()
+                    .fields(
+                        ctx.alloc(),
+                        op.properties.iter().filter_map(|(k, v)| {
+                            if !v.optional {
+                                Some(builder::Field::name(k).value(Node::Bool(true)))
+                            } else {
+                                None
+                            }
+                        }),
+                    )
+                    .build(ctx.alloc());
+                let patterns = builder::Record::new()
+                    .fields(
+                        ctx.alloc(),
+                        op.pattern_properties.iter().map(|(k, v)| {
+                            builder::Field::name(k).value(ctx.sequence(v.to_contract(ctx)))
+                        }),
+                    )
+                    .build(ctx.alloc());
 
-                vec![mk_app!(
-                    ctx.js2n("record.Record"),
-                    Term::Record(RecordData::with_field_values([
-                        ("properties".into(), properties.into()),
-                        ("required".into(), required.into()),
-                        ("patterns".into(), patterns.into()),
-                        ("additional".into(), additional.into())
-                    ]))
-                )]
+                vec![ctx
+                    .alloc()
+                    .app(
+                        ctx.js2n("record.Record"),
+                        [builder::Record::new()
+                            .fields(
+                                ctx.alloc(),
+                                [
+                                    builder::Field::name("properties").value(properties),
+                                    builder::Field::name("required").value(required),
+                                    builder::Field::name("patterns").value(patterns),
+                                    builder::Field::name("additional").value(additional),
+                                ],
+                            )
+                            .build(ctx.alloc())],
+                    )
+                    .into()]
             }),
             Obj::MaxProperties(n) => {
-                vec![mk_app!(ctx.js2n("record.MaxProperties"), num(n))]
+                vec![ctx
+                    .alloc()
+                    .app(ctx.js2n("record.MaxProperties"), [ctx.num(n)])
+                    .into()]
             }
             Obj::MinProperties(n) => {
-                vec![mk_app!(ctx.js2n("record.MinProperties"), num(n))]
+                vec![ctx
+                    .alloc()
+                    .app(ctx.js2n("record.MinProperties"), [ctx.num(n)])
+                    .into()]
             }
             Obj::Required(names) => {
-                vec![mk_app!(
-                    ctx.js2n("record.Required"),
-                    Term::Array(
-                        names.iter().map(|s| Term::Str(s.into()).into()).collect(),
-                        ArrayAttrs::default()
+                vec![ctx
+                    .alloc()
+                    .app(
+                        ctx.js2n("record.Required"),
+                        [ctx.alloc()
+                            .array(names.iter().map(|s| ctx.alloc().string(s).into()))
+                            .into()],
                     )
-                )]
+                    .into()]
             }
             Obj::PropertyNames(schema) => {
-                vec![mk_app!(
-                    ctx.js2n("record.PropertyNames"),
-                    sequence(schema.to_contract(ctx))
-                )]
+                vec![ctx
+                    .alloc()
+                    .app(
+                        ctx.js2n("record.PropertyNames"),
+                        [ctx.sequence(schema.to_contract(ctx))],
+                    )
+                    .into()]
             }
             Obj::DependentFields(deps) => {
-                vec![mk_app!(
-                    ctx.js2n("record.DependentFields"),
-                    Term::Record(RecordData::with_field_values(deps.iter().map(
-                        |(key, value)| {
-                            let arr = Term::Array(
-                                value.iter().map(make::string).collect(),
-                                Default::default(),
+                vec![ctx
+                    .alloc()
+                    .app(
+                        ctx.js2n("record.DependentFields"),
+                        [builder::Record::new()
+                            .fields(
+                                ctx.alloc(),
+                                deps.iter().map(|(key, value)| {
+                                    let arr = ctx
+                                        .alloc()
+                                        .array(value.iter().map(|s| ctx.alloc().string(s).into()));
+                                    builder::Field::name(key).value(arr)
+                                }),
                             )
-                            .into();
-                            (LocIdent::from(key), arr)
-                        }
-                    )))
-                )]
+                            .build(ctx.alloc())],
+                    )
+                    .into()]
             }
             Obj::DependentSchemas(deps) => {
-                vec![mk_app!(
-                    ctx.js2n("record.DependentContracts"),
-                    Term::Record(RecordData::with_field_values(deps.iter().map(
-                        |(key, schema)| {
-                            let contract = sequence(schema.to_contract(ctx));
-                            (LocIdent::from(key), contract)
-                        }
-                    )))
-                )]
+                vec![ctx
+                    .alloc()
+                    .app(
+                        ctx.js2n("record.DependentContracts"),
+                        [builder::Record::new()
+                            .fields(
+                                ctx.alloc(),
+                                deps.iter().map(|(key, schema)| {
+                                    let contract = ctx.sequence(schema.to_contract(ctx));
+                                    builder::Field::name(key).value(contract)
+                                }),
+                            )
+                            .build(ctx.alloc())],
+                    )
+                    .into()]
             }
         }
     }
@@ -234,7 +265,10 @@ impl ObjectProperties {
     /// from arbitrary `ObjectProperties`, but the contracts it creates are not
     /// record contracts and so they miss things like field documentation. This
     /// method attempts to create a better contract, but it's allowed to fail.
-    pub fn to_special_contract(&self, ctx: ContractContext) -> Option<Vec<RichTerm>> {
+    pub fn to_special_contract<'ast>(
+        &self,
+        ctx: ContractContext<'_, 'ast, '_>,
+    ) -> Option<Vec<Ast<'ast>>> {
         let trivial_additional = matches!(
             self.additional_properties.as_deref(),
             None | Some(Schema::Always) | Some(Schema::Never)
@@ -249,40 +283,25 @@ impl ObjectProperties {
             );
 
             let fields = self.properties.iter().map(|(name, prop)| {
-                (
-                    name.into(),
-                    Field {
-                        metadata: FieldMetadata {
-                            annotation: TypeAnnotation {
-                                typ: None,
-                                contracts: prop
-                                    .schema
-                                    .to_contract(ctx)
-                                    .into_iter()
-                                    .map(|c| LabeledType {
-                                        typ: TypeF::Contract(c).into(),
-                                        label: Label::dummy(),
-                                    })
-                                    .collect(),
-                            },
-                            opt: prop.optional,
-                            doc: prop.doc.clone(),
-                            ..Default::default()
-                        },
+                let contracts = prop
+                    .schema
+                    .to_contract(ctx)
+                    .into_iter()
+                    .map(|c| TypeF::Contract(ctx.alloc().alloc(c)).into());
+                builder::Field::name(name)
+                    .metadata(FieldMetadata {
+                        doc: prop.doc.as_ref().map(|s| ctx.alloc().alloc_str(s)),
+                        opt: prop.optional,
                         ..Default::default()
-                    },
-                )
+                    })
+                    .contracts(contracts)
+                    .no_value()
             });
 
-            Some(vec![Term::Record(RecordData {
-                fields: fields.collect(),
-                attrs: RecordAttrs {
-                    open,
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .into()])
+            Some(vec![builder::Record::new()
+                .fields(ctx.alloc(), fields)
+                .set_open(open)
+                .build(ctx.alloc())])
         } else if self.properties.is_empty()
             && self.pattern_properties.is_empty()
             && (!ctx.is_eager() || trivial_additional)
@@ -291,7 +310,7 @@ impl ObjectProperties {
             // properties. We mostly treat this as a dict, but if additional
             // properties are forbidden we treat it as an empty record.
             if no_additional {
-                Some(vec![Term::Record(RecordData::default()).into()])
+                Some(vec![builder::Record::new().build(ctx.alloc())])
             } else {
                 let additional_properties = self
                     .additional_properties
@@ -311,22 +330,28 @@ impl ObjectProperties {
             // unwrap: we checked for length 1
             let (pattern, schema) = self.pattern_properties.iter().next().unwrap();
             let dict = dict_contract(schema, ctx);
-            let names = mk_app!(
+            let names = ctx.alloc().app(
                 ctx.std("record.FieldsMatch"),
-                Term::Str(pattern.to_owned().into())
+                [ctx.alloc().string(pattern).into()],
             );
-            Some(vec![dict, names])
+            Some(vec![dict, names.into()])
         } else {
             None
         }
     }
 }
 
-fn dict_contract(elt_schema: &Schema, ctx: ContractContext) -> RichTerm {
+fn dict_contract<'ast>(elt_schema: &Schema, ctx: ContractContext<'_, 'ast, '_>) -> Ast<'ast> {
     let elt_contract = elt_schema.to_contract(ctx);
 
-    type_contract(TypeF::Dict {
-        type_fields: Box::new(TypeF::Contract(sequence(elt_contract)).into()),
-        flavour: DictTypeFlavour::Contract,
-    })
+    type_contract(
+        ctx.alloc(),
+        TypeF::Dict {
+            type_fields: ctx.alloc().type_data(
+                TypeF::Contract(ctx.alloc().alloc(ctx.sequence(elt_contract))),
+                Default::default(),
+            ),
+            flavour: DictTypeFlavour::Contract,
+        },
+    )
 }

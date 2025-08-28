@@ -8,7 +8,7 @@ in
 let rec
   checkout | workflow.Step = {
     name = "Checking out the repository",
-    uses = "actions/checkout@v4",
+    uses = "actions/checkout@v5",
     with = {
       fetch-depth = "0",
     },
@@ -21,6 +21,7 @@ let rec
       extra_nix_config = m%"
         experimental-features = nix-command flakes
         accept-flake-config = true
+        fallback = true
       "%,
     }
   },

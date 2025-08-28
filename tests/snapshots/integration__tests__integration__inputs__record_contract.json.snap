@@ -1,0 +1,5 @@
+---
+source: tests/integration.rs
+expression: out
+---
+let js2n = FAKE_JS2N_LIB in let rec refs = {} in { foo | Number | optional, .. }
