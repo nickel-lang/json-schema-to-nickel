@@ -41,7 +41,6 @@
         missingSysPkgs =
           if pkgs.stdenv.isDarwin then
             [
-              pkgs.darwin.apple_sdk.frameworks.Security
               pkgs.darwin.libiconv
             ]
           else
