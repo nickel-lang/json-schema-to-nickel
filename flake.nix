@@ -63,7 +63,15 @@
 
         commonArgs = {
           inherit src;
-          nativeBuildInputs = missingSysPkgs;
+          # Rust 1.90 defaults to the lld linker on x86_64-linux, but
+          # something seems to be wrong with the version packaged in fenix: see
+          # https://github.com/nix-community/fenix/issues/206. As a workaround,
+          # we use the one from llvmPackages.bintools instead.
+          nativeBuildInputs = missingSysPkgs ++ (if system == "x86_64-linux" then [ pkgs.llvmPackages.bintools ] else []);
+
+          env = lib.optionalAttrs (system == "x86_64-linux") {
+            RUSTFLAGS = "-C linker-features=-lld";
+          };
         };
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -82,9 +90,7 @@
         checks.${system} = {
           json-schema-to-nickel-clippy = craneLib.cargoClippy (commonArgs // {
             inherit cargoArtifacts;
-            # `json_schema_test_suite` uses deprecated ways of
-            # interacting with `mockito` in a macro expansion in `tests/json_schema_test_suite_test.rs`
-            cargoClippyExtraArgs = "--all-targets -- --deny warnings --allow deprecated";
+            cargoClippyExtraArgs = "--all-targets -- --deny warnings";
           });
 
           json-schema-to-nickel-fmt = craneLib.cargoFmt commonArgs;
