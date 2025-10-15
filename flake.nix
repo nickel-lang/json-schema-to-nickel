@@ -67,7 +67,7 @@
           # something seems to be wrong with the version packaged in fenix: see
           # https://github.com/nix-community/fenix/issues/206. As a workaround,
           # we use the one from llvmPackages.bintools instead.
-          nativeBuildInputs = missingSysPkgs ++ (if system == "x86_64-linux" then [ pkgs.llvmPackages.bintools ] else []);
+          nativeBuildInputs = missingSysPkgs ++ lib.optionals (system == "x86_64-linux") [ pkgs.llvmPackages.bintools ];
 
           env = lib.optionalAttrs (system == "x86_64-linux") {
             RUSTFLAGS = "-C linker-features=-lld";
