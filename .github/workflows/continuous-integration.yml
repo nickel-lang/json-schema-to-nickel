@@ -5,7 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checking out the repository
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         fetch-depth: '0'
     - name: Installing Nix
@@ -23,7 +23,7 @@ jobs:
     runs-on: macos-latest
     steps:
     - name: Checking out the repository
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         fetch-depth: '0'
     - name: Installing Nix
