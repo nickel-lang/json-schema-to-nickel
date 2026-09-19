@@ -276,7 +276,7 @@ pub fn intersect_types(schema: Schema, refs: &AcyclicReferences) -> Schema {
 
                 if !vec
                     .iter()
-                    .any(|s| s.allowed_types_shallow(refs) == allowed_types)
+                    .any(|s| s.allowed_types(refs) == allowed_types)
                 {
                     vec.push(allowed_types.to_schema());
                 }
