@@ -1,0 +1,27 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$comment": "Regression test for https://github.com/nickel-lang/json-schema-to-nickel/issues/149",
+    "type": "object",
+    "properties": {
+        "foo": {
+            "$ref": "#/definitions/foo"
+        }
+    },
+    "definitions": {
+        "foo": {
+            "type": "object",
+            "properties": {
+                "bar": {
+                    "$ref": "#/definitions/bar"
+                }
+            }
+        },
+        "bar": {
+            "type": "string",
+            "enum": [
+                "one",
+                "two"
+            ]
+        }
+    }
+}
